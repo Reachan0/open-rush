@@ -15,6 +15,9 @@ function mapRow(row: TaskRow): Task {
     handoffSummary: row.handoffSummary,
     headRunId: row.headRunId,
     activeRunId: row.activeRunId,
+    // AIGC START
+    definitionVersion: row.definitionVersion,
+    // AIGC END
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -33,6 +36,9 @@ export class DrizzleTaskDb implements TaskDb {
         title: input.title ?? null,
         status: input.status ?? 'active',
         handoffSummary: input.handoffSummary ?? null,
+        // AIGC START
+        definitionVersion: input.definitionVersion ?? null,
+        // AIGC END
       })
       .returning();
     return mapRow(row);

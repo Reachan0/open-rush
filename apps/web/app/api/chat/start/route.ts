@@ -93,6 +93,9 @@ export async function POST(req: Request) {
       projectId: project.id,
       createdBy: userId,
       agentId,
+      // AIGC START
+      definitionVersion: 1,
+      // AIGC END
     });
 
     const conversation = await conversationService.create({

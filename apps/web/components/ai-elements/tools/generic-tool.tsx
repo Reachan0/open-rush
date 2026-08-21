@@ -15,7 +15,7 @@ import type { ToolRendererProps } from '../tool-registry';
  */
 export function GenericTool({ part }: ToolRendererProps) {
   return (
-    <Tool>
+    <Tool defaultOpen>
       <ToolHeader
         type={part.type}
         state={part.state}

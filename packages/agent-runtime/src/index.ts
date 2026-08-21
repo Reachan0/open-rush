@@ -12,6 +12,18 @@ export {
   type ConnectionMode,
   resolveConnectionMode,
 } from './claude-code-provider.js';
+export { DshEventMapper } from './dsh-event-mapper.js';
+export { DshJsonRpcClient } from './dsh-jsonrpc-client.js';
+export { buildDshChildEnv, resolveAgentRuntime, resolveDshLaunch } from './dsh-launch.js';
+export { runDshToUIMessageStream } from './dsh-runtime.js';
+export type {
+  AgentRuntimeKind,
+  DshInitializeParams,
+  DshLaunchSpec,
+  DshNotification,
+  DshRunInput,
+  UIMessageChunk,
+} from './dsh-types.js';
 export {
   type LlmSpanAttributes,
   type LlmTraceEntry,

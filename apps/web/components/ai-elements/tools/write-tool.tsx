@@ -11,11 +11,11 @@ import {
 import type { ToolRendererProps } from '../tool-registry';
 
 export function WriteTool({ part }: ToolRendererProps) {
-  const input = part.input as { file_path?: string } | undefined;
-  const filePath = input?.file_path ?? '';
+  const input = part.input as { file_path?: string; path?: string; filePath?: string } | undefined;
+  const filePath = input?.file_path ?? input?.path ?? input?.filePath ?? '';
 
   return (
-    <Tool>
+    <Tool defaultOpen>
       <ToolHeader
         type={part.type}
         state={part.state}

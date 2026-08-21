@@ -30,11 +30,12 @@
 import { v1 } from '@open-rush/contracts';
 import type { RunStatus } from '@open-rush/control-plane';
 import { computeIdempotencyHash, DrizzleRunDb, RunService } from '@open-rush/control-plane';
-import { getDbClient, runs, tasks } from '@open-rush/db';
+import { agents as agentsTable, getDbClient, runs, tasks } from '@open-rush/db';
 import { and, desc, eq, isNull, like, lt, not, or, sql } from 'drizzle-orm';
 import { v1Error, v1Paginated, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 import { verifyProjectAccess } from '@/lib/api-utils';
 import { authenticate, hasScope } from '@/lib/auth/unified-auth';
+import { getQueue } from '@/lib/queue';
 
 import { decodeRunCursor, encodeRunCursor, mapRunServiceError, runToV1 } from './helpers';
 
@@ -121,14 +122,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
   if (!task.agentId) {
     throw new Error(`Agent ${task.id} has no backing AgentDefinition`);
   }
+  // AIGC START
   if (task.definitionVersion == null) {
-    // task-11 guarantees new rows have a frozen version. Legacy pre-
-    // migration rows may be null — reject so we don't drift an unbound
-    // run.
-    return v1Error('VALIDATION_ERROR', 'Agent has no bound AgentDefinition version', {
-      hint: 'recreate the Agent via POST /api/v1/agents',
-    });
+    const [agent] = await db
+      .select({ currentVersion: agentsTable.currentVersion })
+      .from(agentsTable)
+      .where(eq(agentsTable.id, task.agentId))
+      .limit(1);
+    const boundVersion = agent?.currentVersion ?? 1;
+    await db
+      .update(tasks)
+      .set({ definitionVersion: boundVersion, updatedAt: new Date() })
+      .where(eq(tasks.id, task.id));
+    task.definitionVersion = boundVersion;
   }
+  // AIGC END
 
   const runService = new RunService(new DrizzleRunDb(db));
 
@@ -169,6 +177,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
   }
 
   const wire = runToV1(created, { apiAgentId: task.id });
+  // AIGC START
+  if (created.status === 'queued') {
+    const boss = await getQueue();
+    await boss.send('run/execute', {
+      runId: created.id,
+      prompt: created.prompt,
+      agentId: created.agentId,
+    });
+  }
+  // AIGC END
   return v1Success(wire, 201);
 }
 

@@ -23,9 +23,15 @@ export const defaultToolRegistry = createToolRegistry({
   WebFetch: GenericTool,
   TodoWrite: GenericTool,
   NotebookEdit: GenericTool,
-
-  // Agent/subagent
   Agent: GenericTool,
+  // DeepSeek Harness names (lowercase aliases; registry lookup is case-insensitive)
+  bash: BashTool,
+  write: WriteTool,
+  read: ReadTool,
+  edit: EditTool,
+  glob: ReadTool,
+  ls: ReadTool,
+  grep: BashTool,
 });
 
 export { BashTool } from './bash-tool';

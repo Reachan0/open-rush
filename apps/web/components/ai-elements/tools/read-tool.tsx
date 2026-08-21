@@ -9,7 +9,7 @@ export function ReadTool({ part }: ToolRendererProps) {
   const filePath = input?.file_path ?? input?.pattern ?? input?.path ?? '';
 
   return (
-    <Tool>
+    <Tool defaultOpen>
       <ToolHeader
         type={part.type}
         state={part.state}

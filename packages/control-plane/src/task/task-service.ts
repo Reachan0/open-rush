@@ -8,6 +8,9 @@ export interface Task {
   handoffSummary: string | null;
   headRunId: string | null;
   activeRunId: string | null;
+  // AIGC START
+  definitionVersion: number | null;
+  // AIGC END
   createdAt: Date;
   updatedAt: Date;
 }
@@ -19,6 +22,9 @@ export interface CreateTaskInput {
   title?: string | null;
   status?: string;
   handoffSummary?: string | null;
+  // AIGC START
+  definitionVersion?: number | null;
+  // AIGC END
 }
 
 export interface UpdateTaskInput {

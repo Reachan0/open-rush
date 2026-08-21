@@ -1,29 +1,25 @@
 'use client';
 
 import type { UIMessage } from 'ai';
-import {
-  ArrowUp,
-  ChevronLeft,
-  ChevronRight,
-  Code,
-  ExternalLink,
-  FileText,
-  Lock,
-  Maximize2,
-  Paperclip,
-  RefreshCw,
-  Square,
-} from 'lucide-react';
+import { ArrowUp, Code, ExternalLink, Maximize2, Paperclip, Square } from 'lucide-react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Conversation, ConversationContent } from '@/components/ai-elements/conversation';
 import { Message, MessageContent } from '@/components/ai-elements/message';
 import { PartRenderer } from '@/components/ai-elements/part-renderer';
+import { WorkspaceFilesPanel } from '@/components/chat/workspace-files-panel';
+import { WorkspacePreviewPanel } from '@/components/chat/workspace-preview-panel';
 import { LoadingDots } from '@/components/ui/loading-dots';
 import { useChatAutoSave } from '@/hooks/use-chat-auto-save';
 import { useStreamHeartbeat } from '@/hooks/use-stream-heartbeat';
 import { useStreamRecovery } from '@/hooks/use-stream-recovery';
-import { applyAssistantTextChunk, isStreamError, readRunSseStream } from '@/lib/run-chat-stream';
+import {
+  type AssistantStreamPart,
+  applyAssistantParts,
+  isStreamComplete,
+  isStreamError,
+  readRunSseStream,
+} from '@/lib/run-chat-stream';
 import { cn } from '@/lib/utils';
 
 type PreviewTab = 'preview' | 'code' | 'files';
@@ -73,15 +69,18 @@ export default function ChatPage() {
   const projectId = searchParams.get('projectId') ?? undefined;
   const taskId = searchParams.get('taskId') ?? undefined;
   const conversationId = params.id;
-  const agentId = searchParams.get('agentId') ?? undefined;
   const agentName = searchParams.get('agent') || 'Builder';
   const initialPrompt = searchParams.get('prompt')?.trim() ?? '';
 
-  const [providerLabel, setProviderLabel] = useState('Claude Code');
+  const [providerLabel, setProviderLabel] = useState('DeepSeek Harness');
   useEffect(() => {
     let cancelled = false;
+    // AIGC START
     const runtimeLabels: Record<string, string> = {
+      dsh: 'DeepSeek Harness',
       'claude-code': 'Claude Code',
+      claude: 'Claude Code',
+      cc: 'Claude Code',
     };
     const backendLabels: Record<string, string> = {
       bedrock: 'Bedrock',
@@ -89,27 +88,23 @@ export default function ChatPage() {
       custom: 'Custom Endpoint',
     };
 
-    Promise.all([
-      // v1: GET /api/v1/agent-definitions/:id → { data: { providerType, ... } }
-      agentId
-        ? fetch(`/api/v1/agent-definitions/${encodeURIComponent(agentId)}`).then((r) =>
-            r.ok ? r.json() : null
-          )
-        : null,
-      fetch('/api/health').then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([agentJson, healthJson]) => {
-        if (cancelled) return;
-        const runtime = runtimeLabels[agentJson?.data?.providerType] ?? 'Claude Code';
-        const backend = backendLabels[healthJson?.provider] ?? '';
+    fetch('/api/health')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((healthJson) => {
+        if (cancelled || !healthJson) return;
+        const runtimeKey = String(healthJson.runtime ?? 'dsh');
+        const runtime = runtimeLabels[runtimeKey] ?? 'DeepSeek Harness';
+        const backend =
+          runtimeKey === 'claude-code' ? (backendLabels[healthJson.provider] ?? '') : '';
         setProviderLabel(backend ? `${runtime} · ${backend}` : runtime);
       })
       .catch(() => {});
+    // AIGC END
 
     return () => {
       cancelled = true;
     };
-  }, [agentId]);
+  }, []);
 
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>('ready');
@@ -175,30 +170,32 @@ export default function ChatPage() {
             continue;
           }
 
+          // AIGC START
+          if (isStreamComplete(ev.payload) && currentRunIdRef.current === runId) {
+            sessionStorage.removeItem(seqStorageKey(runId));
+            setStatus('ready');
+          }
+          // AIGC END
+
           lastEventSeqRef.current = ev.seq;
           sessionStorage.setItem(seqStorageKey(runId), String(ev.seq));
           setMessages((prev) => {
+            // AIGC START
             const idx = prev.findIndex((m) => m.id === assistantId);
-            const curText =
-              idx >= 0 && prev[idx].parts[0]?.type === 'text' ? prev[idx].parts[0].text : '';
-            const nextText = applyAssistantTextChunk(curText, ev.payload);
-            if (idx === -1) {
-              return [
-                ...prev,
-                {
-                  id: assistantId,
-                  role: 'assistant',
-                  parts: [{ type: 'text', text: nextText }],
-                },
-              ];
-            }
-            const cur = prev[idx];
-            const next = [...prev];
-            next[idx] = {
-              ...cur,
-              parts: [{ type: 'text', text: nextText }],
+            const curParts = idx >= 0 ? prev[idx].parts : [];
+            const nextParts = applyAssistantParts(curParts as AssistantStreamPart[], ev.payload);
+            const nextMessage: UIMessage = {
+              id: assistantId,
+              role: 'assistant',
+              parts: nextParts as UIMessage['parts'],
             };
+            if (idx === -1) {
+              return [...prev, nextMessage];
+            }
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...nextMessage };
             return next;
+            // AIGC END
           });
         }
       } catch (e) {
@@ -210,6 +207,12 @@ export default function ChatPage() {
           setError(e instanceof Error ? e : new Error(String(e)));
           setStatus('error');
         }
+      } finally {
+        // AIGC START
+        if (currentRunIdRef.current === runId && !ac.signal.aborted) {
+          setStatus((prev) => (prev === 'streaming' || prev === 'submitted' ? 'ready' : prev));
+        }
+        // AIGC END
       }
     },
     [taskId]
@@ -257,7 +260,7 @@ export default function ChatPage() {
         {
           id: 'pending-asst',
           role: 'assistant',
-          parts: [{ type: 'text', text: '' }],
+          parts: [],
         },
       ]);
 
@@ -596,45 +599,7 @@ export default function ChatPage() {
             </div>
             <div className="flex-1 flex flex-col min-w-0 bg-muted/30">
               {activeTab === 'preview' && (
-                <div className="flex-1 flex flex-col min-h-0">
-                  <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-                    <button
-                      type="button"
-                      className="size-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition cursor-pointer"
-                    >
-                      <ChevronLeft className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      className="size-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition cursor-pointer"
-                    >
-                      <ChevronRight className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      className="size-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition cursor-pointer"
-                    >
-                      <RefreshCw className="size-3.5" />
-                    </button>
-                    <div className="flex-1 flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-1.5">
-                      <Lock className="size-3 text-muted-foreground shrink-0" />
-                      <span className="text-[12px] font-mono text-muted-foreground truncate">
-                        https://sandbox-abc123.openrush.dev
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-                    <div className="text-center">
-                      <div className="size-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-3">
-                        <ExternalLink className="size-6" />
-                      </div>
-                      <p className="font-medium">Preview</p>
-                      <p className="text-[12px] text-muted-foreground mt-1">
-                        The sandbox preview will appear here when a run is active.
-                      </p>
-                    </div>
-                  </div>
-                </div>
+                <WorkspacePreviewPanel projectId={projectId} refreshToken={status} />
               )}
               {activeTab === 'code' && (
                 <div className="flex-1 flex flex-col min-h-0">
@@ -648,15 +613,9 @@ export default function ChatPage() {
                 </div>
               )}
               {activeTab === 'files' && (
-                <div className="flex-1 flex flex-col min-h-0">
-                  <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-                    <FileText className="size-4 text-muted-foreground" />
-                    <span className="text-[12px] font-medium text-foreground">Workspace Files</span>
-                  </div>
-                  <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-                    Modified files will appear here during agent execution.
-                  </div>
-                </div>
+                // AIGC START
+                <WorkspaceFilesPanel projectId={projectId} refreshToken={status} />
+                // AIGC END
               )}
             </div>
           </>

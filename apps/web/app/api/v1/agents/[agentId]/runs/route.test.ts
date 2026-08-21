@@ -21,6 +21,7 @@ const {
   mockVerifyProjectAccess,
   mockCreateRun,
   mockComputeHash,
+  mockSend,
   dbFake,
   FakeIdempotencyConflictError,
 } = vi.hoisted(() => {
@@ -37,6 +38,8 @@ const {
   }
 
   const selectSpy = vi.fn();
+  const updateSpy = vi.fn();
+  const mockSend = vi.fn();
   function makeSelectChain(projArgs: unknown[]) {
     const invocation = selectSpy({ kind: 'select', projArgs });
     const result = Array.isArray(invocation) ? invocation : [];
@@ -63,9 +66,19 @@ const {
     mockVerifyProjectAccess: vi.fn(),
     mockCreateRun: vi.fn(),
     mockComputeHash: vi.fn((_body: unknown) => 'hash-of-body'),
+    mockSend,
     dbFake: {
       __select: selectSpy,
+      __update: updateSpy,
       select: (...projArgs: unknown[]) => makeSelectChain(projArgs),
+      update: (_table: unknown) => ({
+        set: (set: unknown) => ({
+          where: (_pred: unknown) => {
+            updateSpy({ kind: 'update', set });
+            return Promise.resolve(undefined);
+          },
+        }),
+      }),
     },
     FakeIdempotencyConflictError: IdempotencyConflict,
   };
@@ -79,6 +92,10 @@ vi.mock('@/lib/auth/unified-auth', () => ({
 vi.mock('@/lib/api-utils', () => ({
   verifyProjectAccess: (projectId: string, userId: string) =>
     mockVerifyProjectAccess(projectId, userId),
+}));
+
+vi.mock('@/lib/queue', () => ({
+  getQueue: async () => ({ send: mockSend }),
 }));
 
 vi.mock('@open-rush/control-plane', () => ({
@@ -101,6 +118,10 @@ vi.mock('@open-rush/db', () => ({
     agentId: 't.aid',
     status: 't.status',
     definitionVersion: 't.dv',
+  },
+  agents: {
+    id: 'a.id',
+    currentVersion: 'a.cv',
   },
   runs: {
     id: 'r.id',
@@ -271,13 +292,18 @@ describe('POST /api/v1/agents/:agentId/runs', () => {
     expect(res.status).toBe(409);
   });
 
-  it('400 when Agent has no bound definitionVersion', async () => {
-    dbFake.__select.mockReturnValueOnce([{ ...SAMPLE_TASK_ROW, definitionVersion: null }]);
+  it('auto-binds AgentDefinition version when the task row is unbound', async () => {
+    dbFake.__select
+      .mockReturnValueOnce([{ ...SAMPLE_TASK_ROW, definitionVersion: null }])
+      .mockReturnValueOnce([{ currentVersion: 1 }]);
+    mockCreateRun.mockResolvedValue({ ...SAMPLE_RUN_RESULT, agentDefinitionVersion: 1 });
     const res = await POST(jsonReq('POST', { input: 'hi' }), { params: paramsOf(TASK_ID) });
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string; hint?: string } };
-    expect(body.error.code).toBe('VALIDATION_ERROR');
-    expect(body.error.hint).toMatch(/recreate/i);
+    expect(res.status).toBe(201);
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDefinitionVersion: 1 }),
+      undefined
+    );
+    expect(dbFake.__update).toHaveBeenCalled();
   });
 
   it('201 creates Run without Idempotency-Key', async () => {
@@ -300,6 +326,14 @@ describe('POST /api/v1/agents/:agentId/runs', () => {
         triggerSource: 'user',
       }),
       undefined
+    );
+    expect(mockSend).toHaveBeenCalledWith(
+      'run/execute',
+      expect.objectContaining({
+        runId: RUN_ID,
+        prompt: 'hello',
+        agentId: DEFINITION_ID,
+      })
     );
   });
 

@@ -23,6 +23,9 @@ class InMemoryTaskDb implements TaskDb {
       handoffSummary: input.handoffSummary ?? null,
       headRunId: null,
       activeRunId: null,
+      // AIGC START
+      definitionVersion: input.definitionVersion ?? null,
+      // AIGC END
       createdAt: now,
       updatedAt: now,
     };

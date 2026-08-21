@@ -19,7 +19,7 @@ export function BashTool({ part }: ToolRendererProps) {
   const command = input?.command ?? '';
 
   return (
-    <Tool>
+    <Tool defaultOpen>
       <ToolHeader
         type={part.type}
         state={part.state}

@@ -9,6 +9,7 @@ describe('GET /api/health', () => {
     delete process.env.CLAUDE_CODE_USE_BEDROCK;
     delete process.env.ANTHROPIC_BASE_URL;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.AGENT_RUNTIME;
   });
 
   afterEach(() => {
@@ -70,8 +71,10 @@ describe('GET /api/health', () => {
   });
 
   it('returns unknown provider when no env vars configured', async () => {
+    delete process.env.AGENT_RUNTIME;
     const body = await importAndCall();
     expect(body.provider).toBe('unknown');
+    expect(body.runtime).toBe('dsh');
   });
 
   it('bedrock takes precedence over custom and anthropic', async () => {
@@ -87,5 +90,11 @@ describe('GET /api/health', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key';
     const body = await importAndCall();
     expect(body.provider).toBe('custom');
+  });
+
+  it('returns claude-code runtime when AGENT_RUNTIME=claude-code', async () => {
+    process.env.AGENT_RUNTIME = 'claude-code';
+    const body = await importAndCall();
+    expect(body.runtime).toBe('claude-code');
   });
 });

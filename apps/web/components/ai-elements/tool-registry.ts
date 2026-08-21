@@ -23,17 +23,22 @@ export interface ToolRegistry {
 }
 
 export function createToolRegistry(tools: Record<string, ToolRenderer> = {}): ToolRegistry {
-  const registry = new Map<string, ToolRenderer>(Object.entries(tools));
+  const registry = new Map<string, ToolRenderer>(
+    Object.entries(tools).map(([name, renderer]) => [name.toLowerCase(), renderer])
+  );
+  // AIGC START
+  // Lookup is case-insensitive so DSH `write` and Claude Code `Write` share renderers.
+  // AIGC END
 
   return {
     getRenderer(toolName: string) {
-      return registry.get(toolName) ?? null;
+      return registry.get(toolName.toLowerCase()) ?? null;
     },
     register(toolName: string, renderer: ToolRenderer) {
-      registry.set(toolName, renderer);
+      registry.set(toolName.toLowerCase(), renderer);
     },
     has(toolName: string) {
-      return registry.has(toolName);
+      return registry.has(toolName.toLowerCase());
     },
   };
 }

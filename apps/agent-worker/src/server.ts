@@ -1,4 +1,3 @@
-import { readdirSync } from 'node:fs';
 import { serve } from '@hono/node-server';
 import {
   ensureProjectDir,
@@ -7,6 +6,7 @@ import {
   resolveSystemPrompt,
   validateProjectId,
 } from '@lux/prompts';
+import { resolveAgentRuntime, runDshToUIMessageStream } from '@open-rush/agent-runtime';
 import { streamText } from 'ai';
 import { claudeCode } from 'ai-sdk-provider-claude-code';
 import { Hono } from 'hono';
@@ -16,10 +16,31 @@ const app = new Hono();
 // Track active sessions for abort support
 const activeSessions = new Map<string, AbortController>();
 
+// AIGC START
+function withStreamCleanup(response: Response, onDone: () => void): Response {
+  if (!response.body) {
+    onDone();
+    return response;
+  }
+  const body = response.body.pipeThrough(
+    new TransformStream({
+      flush() {
+        onDone();
+      },
+    })
+  );
+  return new Response(body, {
+    status: response.status,
+    headers: response.headers,
+  });
+}
+// AIGC END
+
 app.get('/health', (c) =>
   c.json({
     status: 'ok',
     service: 'agent-worker',
+    runtime: resolveAgentRuntime(),
     activeRuns: activeSessions.size,
     timestamp: new Date().toISOString(),
   })
@@ -99,16 +120,36 @@ app.post('/prompt', async (c) => {
       }
     }
 
-    // Model from env: CLAUDE_MODEL / ANTHROPIC_MODEL (Bedrock ARN) or fallback
+    // Model from env: DSH_MODEL / CLAUDE_MODEL / ANTHROPIC_MODEL (Bedrock ARN) or fallback
+    const runtime = resolveAgentRuntime();
     const effectiveModelId =
-      modelId ?? process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'sonnet';
+      modelId ??
+      process.env.DSH_MODEL ??
+      process.env.CLAUDE_MODEL ??
+      process.env.ANTHROPIC_MODEL ??
+      (runtime === 'dsh' ? 'deepseek-v4-flash' : 'sonnet');
     const providerEnv: Record<string, string> = {
       ...(env ?? {}),
       ...(process.env.ANTHROPIC_BASE_URL && { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL }),
       ...(process.env.ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }),
     };
 
-    const hasWorkspaceContent = projectPath && readdirSync(projectPath).length > 0;
+    // AIGC START
+    const workspaceCwd = projectPath ?? process.cwd();
+
+    if (runtime === 'dsh') {
+      const response = runDshToUIMessageStream({
+        prompt: userPrompt,
+        sessionId: sid,
+        systemPrompt: effectiveSystemPrompt,
+        modelId: effectiveModelId,
+        cwd: workspaceCwd,
+        abortSignal: abortController.signal,
+        env: providerEnv,
+      });
+      return withStreamCleanup(response, () => activeSessions.delete(sid));
+    }
+    // AIGC END
 
     const result = streamText({
       model: claudeCode(effectiveModelId, {
@@ -117,7 +158,7 @@ app.post('/prompt', async (c) => {
         sessionId: sid,
         ...(allowedTools?.length ? { allowedTools } : {}),
         ...(Object.keys(providerEnv).length > 0 ? { env: providerEnv } : {}),
-        ...(hasWorkspaceContent ? { cwd: projectPath } : {}),
+        cwd: workspaceCwd,
       }),
       ...(effectiveSystemPrompt ? { system: effectiveSystemPrompt } : {}),
       prompt: userPrompt,

@@ -15,7 +15,7 @@ export function EditTool({ part }: ToolRendererProps) {
   const filePath = input?.file_path ?? '';
 
   return (
-    <Tool>
+    <Tool defaultOpen>
       <ToolHeader
         type={part.type}
         state={part.state}

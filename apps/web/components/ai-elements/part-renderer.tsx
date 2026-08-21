@@ -46,12 +46,21 @@ export const PartRenderer = memo(
 
     // Reasoning / chain-of-thought — collapsible thinking block
     if (part.type === 'reasoning') {
+      // AIGC START
+      const later = message.parts.slice(index + 1);
+      const reasoningDone = later.some(
+        (item) =>
+          item.type === 'text' ||
+          item.type === 'dynamic-tool' ||
+          item.type.startsWith('tool-')
+      );
       return (
-        <Reasoning isStreaming={isStreaming && isLastMessage}>
+        <Reasoning isStreaming={isStreaming && isLastMessage && !reasoningDone}>
           <ReasoningTrigger />
           <ReasoningContent>{part.text}</ReasoningContent>
         </Reasoning>
       );
+      // AIGC END
     }
 
     // Step start/end markers — skip rendering

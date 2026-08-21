@@ -32,15 +32,15 @@ import {
 // GET /api/v1/agents/:id
 // -----------------------------------------------------------------------------
 
-export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ agentId: string }> }) {
   const auth = await authenticate(request);
   if (!auth) return v1Error('UNAUTHORIZED', 'Authentication required');
   if (!hasScope(auth, 'agents:read')) {
     return v1Error('FORBIDDEN', 'Missing scope agents:read');
   }
 
-  const { id } = await params;
-  const paramsParsed = v1.getAgentParamsSchema.safeParse({ id });
+  const { agentId } = await params;
+  const paramsParsed = v1.getAgentParamsSchema.safeParse({ id: agentId });
   if (!paramsParsed.success) return v1ValidationError(paramsParsed.error);
 
   const db = getDbClient();
@@ -65,15 +65,18 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 // DELETE /api/v1/agents/:id  (soft cancel)
 // -----------------------------------------------------------------------------
 
-export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ agentId: string }> }
+) {
   const auth = await authenticate(request);
   if (!auth) return v1Error('UNAUTHORIZED', 'Authentication required');
   if (!hasScope(auth, 'agents:write')) {
     return v1Error('FORBIDDEN', 'Missing scope agents:write');
   }
 
-  const { id } = await params;
-  const paramsParsed = v1.getAgentParamsSchema.safeParse({ id });
+  const { agentId } = await params;
+  const paramsParsed = v1.getAgentParamsSchema.safeParse({ id: agentId });
   if (!paramsParsed.success) return v1ValidationError(paramsParsed.error);
 
   const db = getDbClient();

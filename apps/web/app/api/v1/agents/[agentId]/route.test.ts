@@ -188,7 +188,7 @@ beforeEach(() => {
 });
 
 async function paramsOf(id: string) {
-  return Promise.resolve({ id });
+  return Promise.resolve({ agentId: id });
 }
 
 // ---------------------------------------------------------------------------
