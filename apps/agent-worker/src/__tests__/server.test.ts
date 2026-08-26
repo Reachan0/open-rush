@@ -9,7 +9,71 @@ vi.mock('ai-sdk-provider-claude-code', () => ({
 vi.mock('@hono/node-server', () => ({
   serve: vi.fn(),
 }));
+vi.mock('@open-rush/agent-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@open-rush/agent-runtime')>();
+  return {
+    ...actual,
+    runDshToUIMessageStream: vi.fn(
+      () => new Response('dsh-ok', { headers: { 'x-openrush-runtime': 'dsh' } })
+    ),
+  };
+});
+vi.mock('../amap-mcp.js', () => ({
+  tryConnectAmapFromEnv: vi.fn(async () => null),
+  amapMcpUrl: (key: string) => `https://mcp.amap.com/mcp?key=${encodeURIComponent(key)}`,
+}));
+vi.mock('../coding-mcp.js', () => ({
+  tryConnectCodingTools: vi.fn(async () => null),
+  codingToolsEnabled: () => false,
+  resolveWorkflowWorkspace: (start: string) => start,
+}));
+vi.mock('@open-rush/workflow', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@open-rush/workflow')>();
+  return {
+    ...actual,
+    llmCompleteFromEnv: vi.fn(() => undefined),
+    workflowRun: vi.fn(
+      async (input: { sink?: { emit: (event: unknown) => Promise<void> | void } }) => {
+        const events: Array<{ eventType: string; payload: unknown }> = [];
+        const emit = async (event: { eventType: string; payload: unknown }) => {
+          events.push(event);
+          await input?.sink?.emit(event);
+        };
+        await emit({
+          eventType: 'workflow-planning',
+          payload: { intent: 'demo', via: 'llm' },
+        });
+        await emit({
+          eventType: 'workflow-graph',
+          payload: {
+            name: 'gather',
+            nodes: [{ id: 'fetch_a', tool: 'http.fetch', dependsOn: [] }],
+            edges: [],
+            waves: [['fetch_a']],
+          },
+        });
+        await emit({
+          eventType: 'workflow-node-start',
+          payload: { nodeId: 'fetch_a', tool: 'http.fetch' },
+        });
+        await emit({
+          eventType: 'workflow-node-end',
+          payload: { nodeId: 'fetch_a', status: 'completed', durationMs: 12 },
+        });
+        return {
+          ok: true,
+          degraded: false,
+          output: '周末可以先去上海博物馆，常设展免费，建议提前预约。',
+          rounds: 1,
+          events,
+        };
+      }
+    ),
+  };
+});
 
+import { runDshToUIMessageStream } from '@open-rush/agent-runtime';
+import { workflowRun } from '@open-rush/workflow';
 import { streamText } from 'ai';
 import { claudeCode } from 'ai-sdk-provider-claude-code';
 import app from '../server.js';
@@ -120,6 +184,16 @@ describe('agent-worker server', () => {
       expect(mockResult.toUIMessageStreamResponse).toHaveBeenCalledOnce();
     });
 
+    it('uses DeepSeek Harness when body.runtime is dsh', async () => {
+      const res = await postPrompt({ prompt: 'hello', runtime: 'dsh' });
+      expect(res.status).toBe(200);
+      expect(runDshToUIMessageStream).toHaveBeenCalledOnce();
+      expect(streamText).not.toHaveBeenCalled();
+      expect((runDshToUIMessageStream as Mock).mock.calls[0][0]).toMatchObject({
+        prompt: 'hello',
+      });
+    });
+
     it('extracts the last user message from messages array', async () => {
       mockStreamTextSuccess();
 
@@ -183,18 +257,42 @@ describe('agent-worker server', () => {
 
     it('defaults modelId to sonnet when ANTHROPIC_MODEL env is not set', async () => {
       mockStreamTextSuccess();
-      const original = process.env.ANTHROPIC_MODEL;
+      const original = {
+        ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+        CLAUDE_MODEL: process.env.CLAUDE_MODEL,
+        DSH_MODEL: process.env.DSH_MODEL,
+      };
       delete process.env.ANTHROPIC_MODEL;
+      delete process.env.CLAUDE_MODEL;
+      delete process.env.DSH_MODEL;
 
-      await postPrompt({ prompt: 'hello' });
+      await postPrompt({ prompt: 'hello', runtime: 'claude-code' });
 
       expect(claudeCode).toHaveBeenCalledWith(
         'sonnet',
         expect.objectContaining({ permissionMode: 'bypassPermissions' })
       );
 
-      // Restore
-      if (original !== undefined) process.env.ANTHROPIC_MODEL = original;
+      if (original.ANTHROPIC_MODEL !== undefined)
+        process.env.ANTHROPIC_MODEL = original.ANTHROPIC_MODEL;
+      if (original.CLAUDE_MODEL !== undefined) process.env.CLAUDE_MODEL = original.CLAUDE_MODEL;
+      if (original.DSH_MODEL !== undefined) process.env.DSH_MODEL = original.DSH_MODEL;
+    });
+
+    it('does not send DSH_MODEL to Claude Code when runtime is claude-code', async () => {
+      mockStreamTextSuccess();
+      const original = process.env.DSH_MODEL;
+      process.env.DSH_MODEL = 'DeepSeek-V4-Flash-INT8';
+
+      await postPrompt({ prompt: 'hello', runtime: 'claude-code' });
+
+      expect(claudeCode).toHaveBeenCalledWith(
+        'sonnet',
+        expect.objectContaining({ permissionMode: 'bypassPermissions' })
+      );
+
+      if (original !== undefined) process.env.DSH_MODEL = original;
+      else delete process.env.DSH_MODEL;
     });
 
     it('passes maxTurns to claudeCode provider (defaults to 30)', async () => {
@@ -259,6 +357,33 @@ describe('agent-worker server', () => {
 
       const body = await json(res);
       expect(body.error).toBe('something went wrong');
+    });
+
+    it('keeps vague travel prompts on the agent loop so the model can ask the city', async () => {
+      mockStreamTextSuccess();
+      const res = await postPrompt({
+        prompt: '我周六想带全家出去玩，帮我推荐附近好玩的地方',
+      });
+      expect(res.status).toBe(200);
+      expect(streamText).toHaveBeenCalled();
+      expect(workflowRun).not.toHaveBeenCalled();
+    });
+
+    it('routes gather-and-compose prompts onto the workflow lane', async () => {
+      const res = await postPrompt({
+        prompt: '总结 https://example.com/a 和 https://example.com/b 写成一篇摘要',
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('x-openrush-runtime')).toBe('workflow');
+      expect(workflowRun).toHaveBeenCalled();
+      expect(streamText).not.toHaveBeenCalled();
+      const text = await res.text();
+      expect(text).not.toContain('快车道');
+      expect(text).toContain('上海博物馆');
+      expect(text).toContain('text-delta');
+      expect(text).toContain('tool-input-start');
+      expect(text).toContain('workflow.plan');
+      expect(text).toContain('http.fetch');
     });
   });
 
@@ -463,6 +588,97 @@ describe('agent-worker server', () => {
       for (const type of CANONICAL_CHUNK_TYPES) {
         expect(text).toContain(`"type":"${type}"`);
       }
+    });
+  });
+
+  describe('POST /workflow-run', () => {
+    it('returns 400 when neither intent nor dsl is provided', async () => {
+      const res = await app.request('/workflow-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('executes a travel intent via workflowRun', async () => {
+      const res = await app.request('/workflow-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intent: '我周六想带全家出去玩' }),
+      });
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.ok).toBe(true);
+      expect(workflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intent: '我周六想带全家出去玩',
+          allowHeuristic: true,
+        })
+      );
+    });
+
+    it('streams node events when stream=1', async () => {
+      const res = await app.request('/workflow-run?stream=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify({ intent: '我周六想带全家出去玩' }),
+      });
+      expect(res.headers.get('content-type') ?? '').toContain('text/event-stream');
+      const text = await res.text();
+      expect(text).toContain('workflow-planning');
+      expect(text).toContain('workflow-graph');
+      expect(text).toContain('workflow-node-start');
+      expect(text).toContain('workflow-result');
+    });
+  });
+
+  describe('GET /workflow-live', () => {
+    it('returns the live DAG page', async () => {
+      const res = await app.request('/workflow-live');
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('OpenRush 快车道');
+      expect(text).toContain('workflow-graph');
+      expect(text).toContain('/workflow-run?stream=1');
+      expect(text).toContain('id="intent"');
+      expect(text).toContain('disableFallback: true');
+      expect(text).toContain('workflow-foreach-item');
+      expect(text).toContain('FOREACH_W');
+      expect(text).toContain('真实搜索 · 上海亲子攻略');
+      expect(text).toContain('官方文档 · TS 5.7 notes');
+      expect(text).toContain('双官方文档 · 并行抓取');
+      expect(text).toContain('https://pnpm.io/catalogs');
+      expect(text).toContain('coding MCP · 介绍仓库');
+      expect(text).toContain('coding MCP · 查函数');
+      expect(text).toContain('coding MCP · 看 workflow 包');
+      expect(text).toContain('coding MCP · git 状态');
+      expect(text).toContain('高德 · 步行+天气');
+      expect(text).toContain('/workflow-catalog');
+      expect(text).toContain('节点详情');
+      expect(text).toContain('__start__');
+      expect(text).toContain('__end__');
+      expect(text).toContain('data-node');
+      expect(text).toContain('id="inspect"');
+      expect(text).toContain('node-box.terminal.selected');
+      expect(text).toContain('followNode("__end__"');
+      expect(text).not.toContain('loadGraph');
+      const start = text.indexOf('<script>');
+      const end = text.indexOf('</script>', start);
+      const script = text.slice(start + 8, end);
+      expect(start).toBeGreaterThan(0);
+      expect(() => new Function(script)).not.toThrow();
+    });
+  });
+
+  describe('GET /workflow-catalog', () => {
+    it('lists platform plus travel mocks when Amap is unavailable', async () => {
+      const res = await app.request('/workflow-catalog');
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.amap).toBe(false);
+      expect(body.coding).toBe(false);
+      expect(body.tools).toEqual(expect.arrayContaining(['web.search', 'geo.locate']));
     });
   });
 });

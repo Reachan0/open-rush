@@ -26,6 +26,27 @@ interface JSONRPCResponse {
   id: number | string;
 }
 
+// AIGC START
+async function parseMcpHttpResponse(response: Response): Promise<JSONRPCResponse> {
+  const raw = await response.text();
+  const ctype = response.headers.get('content-type') ?? '';
+  const payload = ctype.includes('text/event-stream') ? lastSseDataPayload(raw) : raw.trim();
+  if (!payload) {
+    throw new Error('MCP HTTP response was empty');
+  }
+  return JSON.parse(payload) as JSONRPCResponse;
+}
+
+function lastSseDataPayload(raw: string): string {
+  const chunks = raw
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .filter((line) => line && line !== '[DONE]');
+  return chunks.at(-1) ?? '';
+}
+// AIGC END
+
 // ---------------------------------------------------------------------------
 // Client interface
 // ---------------------------------------------------------------------------
@@ -240,6 +261,7 @@ export class HttpMcpClient implements IMcpClient {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
     };
     if (this.sessionId) {
       headers['Mcp-Session-Id'] = this.sessionId;
@@ -250,6 +272,16 @@ export class HttpMcpClient implements IMcpClient {
       headers,
       body: JSON.stringify(request),
       signal: AbortSignal.timeout(this.timeout),
+    }).catch((err: unknown) => {
+      const cause =
+        err instanceof Error && err.cause instanceof Error
+          ? err.cause.message
+          : err instanceof Error && err.cause
+            ? String(err.cause)
+            : '';
+      throw new Error(
+        `MCP HTTP fetch failed${cause ? ` (${cause})` : ''}: ${err instanceof Error ? err.message : String(err)}`
+      );
     });
 
     // Capture session ID from response
@@ -260,7 +292,7 @@ export class HttpMcpClient implements IMcpClient {
       throw new Error(`MCP HTTP error: ${response.status} ${response.statusText}`);
     }
 
-    const json = (await response.json()) as JSONRPCResponse;
+    const json = (await parseMcpHttpResponse(response)) as JSONRPCResponse;
     if (json.error) {
       throw new Error(`MCP error ${json.error.code}: ${json.error.message}`);
     }

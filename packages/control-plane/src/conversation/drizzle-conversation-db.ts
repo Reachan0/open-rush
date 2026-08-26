@@ -1,4 +1,4 @@
-import { conversations, type DbClient } from '@open-rush/db';
+import { agents, conversations, type DbClient } from '@open-rush/db';
 import { desc, eq } from 'drizzle-orm';
 
 import type {
@@ -9,12 +9,15 @@ import type {
 
 type ConversationRow = typeof conversations.$inferSelect;
 
-function mapRow(row: ConversationRow): Conversation {
+function mapRow(row: ConversationRow, agentName?: string | null): Conversation {
   return {
     id: row.id,
     projectId: row.projectId,
     taskId: row.taskId,
     agentId: row.agentId,
+    // AIGC START
+    agentName: agentName ?? null,
+    // AIGC END
     userId: row.userId,
     title: row.title,
     summary: row.summary,
@@ -44,21 +47,29 @@ export class DrizzleConversationDb implements ConversationDb {
 
   async findById(id: string): Promise<Conversation | null> {
     const [row] = await this.db
-      .select()
+      .select({
+        conversation: conversations,
+        agentName: agents.name,
+      })
       .from(conversations)
+      .leftJoin(agents, eq(conversations.agentId, agents.id))
       .where(eq(conversations.id, id))
       .limit(1);
-    return row ? mapRow(row) : null;
+    return row ? mapRow(row.conversation, row.agentName) : null;
   }
 
   async listByProject(projectId: string, limit = 50): Promise<Conversation[]> {
     const rows = await this.db
-      .select()
+      .select({
+        conversation: conversations,
+        agentName: agents.name,
+      })
       .from(conversations)
+      .leftJoin(agents, eq(conversations.agentId, agents.id))
       .where(eq(conversations.projectId, projectId))
       .orderBy(desc(conversations.updatedAt))
       .limit(limit);
-    return rows.map(mapRow);
+    return rows.map((row) => mapRow(row.conversation, row.agentName));
   }
 
   async updateTitle(id: string, title: string): Promise<Conversation | null> {

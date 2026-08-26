@@ -337,6 +337,29 @@ describe('POST /api/v1/agents/:agentId/runs', () => {
     );
   });
 
+  it('201 forwards runtime onto the run and execute job', async () => {
+    dbFake.__select.mockReturnValueOnce([SAMPLE_TASK_ROW]);
+    mockCreateRun.mockResolvedValue(SAMPLE_RUN_RESULT);
+    const res = await POST(jsonReq('POST', { input: 'hello', runtime: 'dsh' }), {
+      params: paramsOf(TASK_ID),
+    });
+    expect(res.status).toBe(201);
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: 'hello',
+        provider: 'dsh',
+      }),
+      undefined
+    );
+    expect(mockSend).toHaveBeenCalledWith(
+      'run/execute',
+      expect.objectContaining({
+        runId: RUN_ID,
+        runtime: 'dsh',
+      })
+    );
+  });
+
   it('201 passes task-scoped Idempotency-Key + hash to service', async () => {
     dbFake.__select.mockReturnValueOnce([SAMPLE_TASK_ROW]);
     mockCreateRun.mockResolvedValue(SAMPLE_RUN_RESULT);

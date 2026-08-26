@@ -2,12 +2,14 @@
 'use client';
 
 import {
+  isToolRunning,
   Tool,
   ToolContent,
   ToolHeader,
   ToolInput,
   ToolOutput,
 } from '@/components/ai-elements/tool';
+import { prettyToolName } from '@/lib/workflow-dag-model';
 import type { ToolRendererProps } from '../tool-registry';
 
 /**
@@ -15,12 +17,12 @@ import type { ToolRendererProps } from '../tool-registry';
  */
 export function GenericTool({ part }: ToolRendererProps) {
   return (
-    <Tool defaultOpen>
+    <Tool defaultOpen={isToolRunning(part.state)}>
       <ToolHeader
         type={part.type}
         state={part.state}
         toolName={part.toolName}
-        title={part.toolName}
+        title={prettyToolName(part.toolName)}
       />
       <ToolContent>
         {part.input && <ToolInput input={part.input} />}

@@ -4,12 +4,18 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgentRuntimeKind, DshLaunchSpec } from './dsh-types.js';
 
+export function parseAgentRuntimeKind(raw: unknown): AgentRuntimeKind | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === 'claude-code' || value === 'claude' || value === 'cc') return 'claude-code';
+  if (value === 'dsh' || value === 'deepseek' || value === 'deepseek-harness') return 'dsh';
+  return undefined;
+}
+
 export function resolveAgentRuntime(
   env: Record<string, string | undefined> = process.env
 ): AgentRuntimeKind {
-  const raw = (env.AGENT_RUNTIME ?? 'dsh').trim().toLowerCase();
-  if (raw === 'claude-code' || raw === 'claude' || raw === 'cc') return 'claude-code';
-  return 'dsh';
+  return parseAgentRuntimeKind(env.AGENT_RUNTIME) ?? 'dsh';
 }
 
 function findWorkspaceRoot(startDir: string): string | undefined {

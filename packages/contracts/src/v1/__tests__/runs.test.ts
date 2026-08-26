@@ -63,6 +63,16 @@ describe('createRunRequestSchema', () => {
       }).success
     ).toBe(false);
   });
+
+  it('accepts optional runtime switch', () => {
+    expect(createRunRequestSchema.parse({ input: 'go', runtime: 'dsh' }).runtime).toBe('dsh');
+    expect(createRunRequestSchema.parse({ input: 'go', runtime: 'claude-code' }).runtime).toBe(
+      'claude-code'
+    );
+    expect(createRunRequestSchema.safeParse({ input: 'go', runtime: 'openai' }).success).toBe(
+      false
+    );
+  });
 });
 
 describe('idempotencyKeyHeaderSchema', () => {

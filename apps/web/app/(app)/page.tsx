@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { readActiveProjectId, writeActiveProjectId } from '@/lib/active-project';
 import { fetchAllV1 } from '@/lib/api/v1-list';
 
 interface AgentOption {
@@ -83,7 +84,10 @@ export default function HomePage() {
         const nextAgents = agentResponses.flat();
         if (!mounted) return;
         setAgents(nextAgents);
-        setSelectedAgentId(nextAgents[0]?.id ?? null);
+        const preferredProjectId = readActiveProjectId();
+        const preferredAgent =
+          nextAgents.find((agent) => agent.projectId === preferredProjectId) ?? nextAgents[0];
+        setSelectedAgentId(preferredAgent?.id ?? null);
       } catch (err) {
         if (!mounted) return;
         setError(err instanceof Error ? err.message : 'Failed to load agents');
@@ -108,15 +112,20 @@ export default function HomePage() {
       setError(null);
 
       try {
+        const preferredProjectId = agent?.projectId ?? readActiveProjectId();
         const res = await fetch('/api/chat/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(agent ? { agentId: agent.id } : {}),
+          body: JSON.stringify({
+            ...(preferredProjectId ? { projectId: preferredProjectId } : {}),
+            ...(agent ? { agentId: agent.id } : {}),
+          }),
         });
         const json = await res.json();
 
         if (json.success && json.data) {
           const { projectId, taskId, conversationId } = json.data;
+          writeActiveProjectId(projectId);
           const params = new URLSearchParams({ projectId, taskId });
           if (agent) {
             params.set('agent', agent.name);

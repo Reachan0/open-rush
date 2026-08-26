@@ -1,7 +1,7 @@
 // @ts-nocheck
 'use client';
 
-import { Tool, ToolContent, ToolHeader, ToolOutput } from '@/components/ai-elements/tool';
+import { isToolRunning, Tool, ToolContent, ToolHeader, ToolOutput } from '@/components/ai-elements/tool';
 import type { ToolRendererProps } from '../tool-registry';
 
 export function ReadTool({ part }: ToolRendererProps) {
@@ -9,7 +9,7 @@ export function ReadTool({ part }: ToolRendererProps) {
   const filePath = input?.file_path ?? input?.pattern ?? input?.path ?? '';
 
   return (
-    <Tool defaultOpen>
+    <Tool defaultOpen={isToolRunning(part.state)}>
       <ToolHeader
         type={part.type}
         state={part.state}

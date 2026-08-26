@@ -3,6 +3,7 @@ export interface Conversation {
   projectId: string;
   taskId: string | null;
   agentId: string | null;
+  agentName?: string | null;
   userId: string;
   title: string | null;
   summary: string | null;

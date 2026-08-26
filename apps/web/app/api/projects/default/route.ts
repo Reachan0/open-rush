@@ -5,7 +5,7 @@
  * Used by the chat flow to ensure every conversation has a project.
  */
 
-import { getDbClient, projects } from '@open-rush/db';
+import { getDbClient, projectMembers, projects } from '@open-rush/db';
 import { and, eq, isNull } from 'drizzle-orm';
 import { apiError, apiSuccess, requireAuth } from '@/lib/api-utils';
 
@@ -30,6 +30,14 @@ export async function GET() {
     .limit(1);
 
   if (existing) {
+    await db
+      .insert(projectMembers)
+      .values({
+        projectId: existing.id,
+        userId,
+        role: 'owner',
+      })
+      .onConflictDoNothing();
     return apiSuccess({ id: existing.id, name: existing.name });
   }
 
@@ -45,6 +53,12 @@ export async function GET() {
   if (!created) {
     return apiError(500, 'INTERNAL_ERROR', 'Failed to create default project');
   }
+
+  await db.insert(projectMembers).values({
+    projectId: created.id,
+    userId,
+    role: 'owner',
+  });
 
   return apiSuccess({ id: created.id, name: created.name });
 }

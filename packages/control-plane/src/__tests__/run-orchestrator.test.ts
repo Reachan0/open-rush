@@ -287,6 +287,19 @@ describe('RunOrchestrator', () => {
       expect(body.sessionId).toBe('run-2');
     });
 
+    it('forwards explicit runtime to the agent worker', async () => {
+      const run = makeQueuedRun('run-runtime');
+      run.provider = 'dsh';
+      runDb.seed(run);
+      fetchMock.mockResolvedValueOnce(mockSSEResponse([{ type: 'done', reason: 'end_turn' }]));
+
+      await orchestrator.execute('run-runtime', 'hello', 'agent-1', { runtime: 'dsh' });
+
+      const [, init] = fetchMock.mock.calls[0];
+      const body = JSON.parse(init.body);
+      expect(body.runtime).toBe('dsh');
+    });
+
     it('passes through startedAt when entering running state', async () => {
       const run = makeQueuedRun('run-3');
       runDb.seed(run);

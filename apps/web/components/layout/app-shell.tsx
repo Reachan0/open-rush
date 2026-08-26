@@ -1,6 +1,6 @@
 'use client';
 
-import { Activity, Layers, LogOut, MessageSquare, Rss, Wrench } from 'lucide-react';
+import { FolderKanban, Layers, LogOut, MessageSquare, Rss, Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -26,10 +26,10 @@ interface AppShellProps {
 
 const mobileNavItems = [
   { href: '/', label: 'Chat', icon: MessageSquare },
+  { href: '/dashboard', label: 'Projects', icon: FolderKanban },
   { href: '/studio', label: 'Studio', icon: Layers },
   { href: '/skills', label: 'Skills', icon: Wrench },
   { href: '/mcps', label: 'MCPs', icon: Rss },
-  { href: '/runs', label: 'Runs', icon: Activity },
 ];
 
 export function AppShell({ user, projects = [], children }: AppShellProps) {
@@ -69,7 +69,12 @@ export function AppShell({ user, projects = [], children }: AppShellProps) {
       </main>
       <nav className="hidden max-md:grid grid-cols-5 gap-1 border-t border-border bg-card px-2 py-2 shrink-0">
         {mobileNavItems.map((item) => {
-          const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+          const isActive =
+            item.href === '/'
+              ? pathname === '/'
+              : item.href === '/dashboard'
+                ? pathname.startsWith('/dashboard') || pathname.startsWith('/projects')
+                : pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}

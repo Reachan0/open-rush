@@ -30,6 +30,7 @@ export class AgentBridge {
       maxTurns?: number;
       projectId?: string;
       agentConfig?: AgentBridgeAgentConfig;
+      runtime?: 'dsh' | 'claude-code';
     } = {}
   ): Promise<AgentBridgeResult> {
     const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -53,6 +54,9 @@ export class AgentBridge {
         maxTurns: options.maxTurns,
         projectId: options.projectId,
         agentConfig: options.agentConfig,
+        // AIGC START
+        runtime: options.runtime,
+        // AIGC END
         streamId,
       }),
       signal: AbortSignal.timeout(this.config.requestTimeoutMs ?? 300_000),

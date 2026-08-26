@@ -7,6 +7,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Conversation, ConversationContent } from '@/components/ai-elements/conversation';
 import { Message, MessageContent } from '@/components/ai-elements/message';
 import { PartRenderer } from '@/components/ai-elements/part-renderer';
+import { WorkflowDagProvider } from '@/components/chat/workflow-dag-context';
+import { WorkflowPanel } from '@/components/chat/workflow-panel';
 import { WorkspaceFilesPanel } from '@/components/chat/workspace-files-panel';
 import { WorkspacePreviewPanel } from '@/components/chat/workspace-preview-panel';
 import { LoadingDots } from '@/components/ui/loading-dots';
@@ -21,10 +23,16 @@ import {
   readRunSseStream,
 } from '@/lib/run-chat-stream';
 import { cn } from '@/lib/utils';
+import { findLatestWorkflowPlan } from '@/lib/workflow-dag-model';
 
-type PreviewTab = 'preview' | 'code' | 'files';
+type PreviewTab = 'preview' | 'code' | 'files' | 'workflow';
 
 type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
+
+// AIGC START
+const RUNTIME_STORAGE_KEY = 'openrush:chat-runtime';
+type ChatRuntime = 'dsh' | 'claude-code';
+// AIGC END
 
 function seqStorageKey(runId: string) {
   return `lux:lastEventSeq:${runId}`;
@@ -69,12 +77,22 @@ export default function ChatPage() {
   const projectId = searchParams.get('projectId') ?? undefined;
   const taskId = searchParams.get('taskId') ?? undefined;
   const conversationId = params.id;
-  const agentName = searchParams.get('agent') || 'Builder';
+  // AIGC START
+  const urlAgentName = searchParams.get('agent') || '';
   const initialPrompt = searchParams.get('prompt')?.trim() ?? '';
+  const [boundAgentName, setBoundAgentName] = useState(urlAgentName);
+  const agentName = boundAgentName || urlAgentName || 'OpenRush';
+  // AIGC END
 
   const [providerLabel, setProviderLabel] = useState('DeepSeek Harness');
+  const [runtime, setRuntime] = useState<ChatRuntime>('dsh');
   useEffect(() => {
     let cancelled = false;
+    const stored = window.localStorage.getItem(RUNTIME_STORAGE_KEY);
+    if (stored === 'dsh' || stored === 'claude-code') {
+      setRuntime(stored);
+      setProviderLabel(stored === 'claude-code' ? 'Claude Code' : 'DeepSeek Harness');
+    }
     // AIGC START
     const runtimeLabels: Record<string, string> = {
       dsh: 'DeepSeek Harness',
@@ -92,11 +110,15 @@ export default function ChatPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((healthJson) => {
         if (cancelled || !healthJson) return;
+        const storedRuntime = window.localStorage.getItem(RUNTIME_STORAGE_KEY);
+        if (storedRuntime === 'dsh' || storedRuntime === 'claude-code') return;
         const runtimeKey = String(healthJson.runtime ?? 'dsh');
-        const runtime = runtimeLabels[runtimeKey] ?? 'DeepSeek Harness';
+        const nextRuntime: ChatRuntime = runtimeKey === 'claude-code' ? 'claude-code' : 'dsh';
+        setRuntime(nextRuntime);
+        const runtimeName = runtimeLabels[runtimeKey] ?? 'DeepSeek Harness';
         const backend =
-          runtimeKey === 'claude-code' ? (backendLabels[healthJson.provider] ?? '') : '';
-        setProviderLabel(backend ? `${runtime} · ${backend}` : runtime);
+          nextRuntime === 'claude-code' ? (backendLabels[healthJson.provider] ?? '') : '';
+        setProviderLabel(backend ? `${runtimeName} · ${backend}` : runtimeName);
       })
       .catch(() => {});
     // AIGC END
@@ -277,7 +299,7 @@ export default function ChatPage() {
             // double-click doesn't spawn duplicate runs. See specs §幂等性.
             'Idempotency-Key': crypto.randomUUID(),
           },
-          body: JSON.stringify({ input: text }),
+          body: JSON.stringify({ input: text, runtime }),
         });
 
         const body = (await res.json()) as {
@@ -307,7 +329,7 @@ export default function ChatPage() {
         setStatus('error');
       }
     },
-    [projectId, taskId, clearError]
+    [projectId, taskId, clearError, runtime]
   );
 
   const stopRun = useCallback(async () => {
@@ -336,12 +358,18 @@ export default function ChatPage() {
     let cancelled = false;
 
     void (async () => {
-      const msgRes = await fetch(`/api/chat/${encodeURIComponent(conversationId)}/messages`).then(
-        (r) => r.json()
-      );
+      const [msgRes, convRes] = await Promise.all([
+        fetch(`/api/chat/${encodeURIComponent(conversationId)}/messages`).then((r) => r.json()),
+        fetch(`/api/conversations/${encodeURIComponent(conversationId)}`).then((r) => r.json()),
+      ]);
       const loaded = (
         msgRes.success && Array.isArray(msgRes.data) ? msgRes.data : []
       ) as UIMessage[];
+      const convAgentName =
+        typeof convRes?.data?.conversation?.agentName === 'string'
+          ? convRes.data.conversation.agentName
+          : '';
+      if (convAgentName) setBoundAgentName(convAgentName);
 
       if (cancelled) return;
 
@@ -385,6 +413,12 @@ export default function ChatPage() {
 
     return () => {
       cancelled = true;
+      // AIGC START
+      // React Strict Mode remounts in dev; clear the guard so history reloads.
+      if (loadedConvRef.current === conversationId) {
+        loadedConvRef.current = null;
+      }
+      // AIGC END
     };
   }, [conversationId, taskId, projectId, initialPrompt]);
 
@@ -402,6 +436,17 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [activeTab, setActiveTab] = useState<PreviewTab | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autoOpenedWorkflowRef = useRef(false);
+
+  // AIGC START
+  useEffect(() => {
+    if (autoOpenedWorkflowRef.current) return;
+    if (status !== 'streaming' && status !== 'submitted') return;
+    if (!findLatestWorkflowPlan(messages)?.graph) return;
+    autoOpenedWorkflowRef.current = true;
+    setActiveTab('workflow');
+  }, [messages, status]);
+  // AIGC END
 
   const handleSubmit = useCallback(() => {
     const text = input.trim();
@@ -437,190 +482,219 @@ export default function ChatPage() {
   const chatStatusForUi = status;
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-5 py-2.5 border-b border-border shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="size-7 rounded-lg bg-blue-50 dark:bg-blue-950 flex items-center justify-center text-[11px] font-bold text-blue-600 dark:text-blue-400">
-            {agentName.charAt(0).toUpperCase()}
-          </div>
-          <div>
-            <div className="text-[14px] font-semibold leading-none">{agentName}</div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">{providerLabel}</div>
-          </div>
-          {isLoading && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-950 text-[11px] font-medium text-blue-600 dark:text-blue-400 ml-2">
-              <div className="size-1.5 rounded-full bg-blue-600 dark:bg-blue-400 animate-pulse" />
-              Running
+    <WorkflowDagProvider openPanel={() => setActiveTab('workflow')}>
+      <div className="flex flex-col h-full">
+        <div className="flex items-center justify-between px-5 py-2.5 border-b border-border shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="size-7 rounded-lg bg-blue-50 dark:bg-blue-950 flex items-center justify-center text-[11px] font-bold text-blue-600 dark:text-blue-400">
+              {agentName.charAt(0).toUpperCase()}
             </div>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="flex items-center bg-muted rounded-lg p-[2px] mr-2">
-            {(['preview', 'code', 'files'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab((prev) => (prev === tab ? null : tab))}
-                className={cn(
-                  'h-6 px-2.5 rounded-md text-[11px] font-medium cursor-pointer transition',
-                  activeTab === tab
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="size-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer"
-            title="Open in new tab"
-          >
-            <ExternalLink className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            className="size-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer"
-            title="Fullscreen"
-          >
-            <Maximize2 className="size-3.5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        <div className={cn('flex flex-col min-w-[380px]', activeTab ? 'w-[42%]' : 'flex-1')}>
-          <div className="flex-1 overflow-y-auto px-5 py-5">
-            {(!taskId || !projectId) && (
-              <div className="mx-auto max-w-2xl mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
-                缺少 task 或项目上下文。请从首页「开始聊天」进入，或从侧边栏打开会话。
+            <div>
+              <div className="text-[14px] font-semibold leading-none">{agentName}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">{providerLabel}</div>
+            </div>
+            <select
+              value={runtime}
+              disabled={isLoading}
+              onChange={(e) => {
+                const next: ChatRuntime = e.target.value === 'claude-code' ? 'claude-code' : 'dsh';
+                setRuntime(next);
+                window.localStorage.setItem(RUNTIME_STORAGE_KEY, next);
+                setProviderLabel(next === 'claude-code' ? 'Claude Code' : 'DeepSeek Harness');
+              }}
+              className="h-7 rounded-md border border-border bg-background px-2 text-[11px] text-foreground disabled:opacity-50"
+              aria-label="选择运行时"
+            >
+              <option value="dsh">DeepSeek Harness</option>
+              <option value="claude-code">Claude Code</option>
+            </select>
+            {isLoading && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-950 text-[11px] font-medium text-blue-600 dark:text-blue-400 ml-2">
+                <div className="size-1.5 rounded-full bg-blue-600 dark:bg-blue-400 animate-pulse" />
+                Running
               </div>
             )}
-
-            {error && (
-              <div className="mx-auto max-w-2xl mb-4 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                {error.message || 'An error occurred. Please try again.'}
-              </div>
-            )}
-
-            <Conversation className="max-w-2xl mx-auto">
-              <ConversationContent>
-                {messages.length === 0 && !isLoading && (
-                  <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-                    <p className="text-sm">Send a message to start building.</p>
-                  </div>
-                )}
-
-                {messages.map((message, messageIndex) => (
-                  <Message key={message.id} from={message.role}>
-                    <MessageContent>
-                      {message.parts.map((part, partIndex) => (
-                        <PartRenderer
-                          // biome-ignore lint/suspicious/noArrayIndexKey: stable message parts
-                          key={`${message.id}-${partIndex}`}
-                          part={part}
-                          message={message}
-                          index={partIndex}
-                          status={chatStatusForUi}
-                          isLastMessage={messageIndex === messages.length - 1}
-                        />
-                      ))}
-                      {isLoading &&
-                        messageIndex === messages.length - 1 &&
-                        (message.role === 'user' ||
-                          (message.role === 'assistant' &&
-                            !message.parts.some((p) => p.type === 'text' && p.text))) && (
-                          <div className="flex items-center gap-2 py-2 text-muted-foreground">
-                            <LoadingDots size="md" label="Thinking" />
-                          </div>
-                        )}
-                    </MessageContent>
-                  </Message>
-                ))}
-              </ConversationContent>
-            </Conversation>
           </div>
-
-          <div className="border-t border-border px-4 py-3 shrink-0">
-            <div className="max-w-2xl mx-auto">
-              <div className="flex items-end gap-2.5 border border-border rounded-xl p-2.5 bg-card focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/10 transition-all">
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center bg-muted rounded-lg p-[2px] mr-2">
+              {(['preview', 'code', 'files', 'workflow'] as const).map((tab) => (
                 <button
+                  key={tab}
                   type="button"
-                  className="size-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer shrink-0"
+                  onClick={() => setActiveTab((prev) => (prev === tab ? null : tab))}
+                  className={cn(
+                    'h-6 px-2.5 rounded-md text-[11px] font-medium cursor-pointer transition',
+                    activeTab === tab
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
                 >
-                  <Paperclip className="size-[18px]" />
+                  {tab === 'workflow' ? 'Workflow' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                 </button>
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={handleInput}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Continue the conversation..."
-                  rows={1}
-                  disabled={isLoading || !taskId || !projectId}
-                  className="flex-1 bg-transparent border-none outline-none text-[13px] resize-none min-h-[24px] max-h-[200px] placeholder:text-muted-foreground/50 leading-relaxed disabled:opacity-50"
-                />
-                {isLoading ? (
-                  <button
-                    type="button"
-                    onClick={() => void stopRun()}
-                    className="size-8 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center hover:bg-destructive/20 transition cursor-pointer shrink-0"
-                  >
-                    <Square className="size-[18px]" />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    className="size-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 transition cursor-pointer shrink-0"
-                  >
-                    <ArrowUp className="size-[18px]" />
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center justify-between mt-1.5 px-1">
-                <span className="text-[10px] text-muted-foreground">
-                  <kbd className="font-mono text-[9px] bg-muted border border-border px-1 rounded">
-                    Enter
-                  </kbd>{' '}
-                  send
-                </span>
-                <span className="text-[10px] font-mono text-muted-foreground">{providerLabel}</span>
-              </div>
+              ))}
             </div>
+            <button
+              type="button"
+              className="size-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer"
+              title="Open in new tab"
+            >
+              <ExternalLink className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              className="size-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer"
+              title="Fullscreen"
+            >
+              <Maximize2 className="size-3.5" />
+            </button>
           </div>
         </div>
 
-        {activeTab && (
-          <>
-            <div className="w-[3px] shrink-0 relative cursor-col-resize group flex items-center justify-center hover:bg-primary/10 transition-colors">
-              <div className="w-1 h-8 rounded-full bg-border group-hover:bg-muted-foreground transition-colors" />
-            </div>
-            <div className="flex-1 flex flex-col min-w-0 bg-muted/30">
-              {activeTab === 'preview' && (
-                <WorkspacePreviewPanel projectId={projectId} refreshToken={status} />
-              )}
-              {activeTab === 'code' && (
-                <div className="flex-1 flex flex-col min-h-0">
-                  <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-                    <Code className="size-4 text-muted-foreground" />
-                    <span className="text-[12px] font-mono text-muted-foreground">Code view</span>
-                  </div>
-                  <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-                    Code changes will appear here during agent execution.
-                  </div>
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          <div className={cn('flex flex-col min-w-[380px]', activeTab ? 'w-[42%]' : 'flex-1')}>
+            <div className="flex-1 overflow-y-auto px-5 py-5">
+              {(!taskId || !projectId) && (
+                <div className="mx-auto max-w-2xl mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+                  缺少 task 或项目上下文。请从首页「开始聊天」进入，或从侧边栏打开会话。
                 </div>
               )}
-              {activeTab === 'files' && (
-                // AIGC START
-                <WorkspaceFilesPanel projectId={projectId} refreshToken={status} />
-                // AIGC END
+
+              {error && (
+                <div className="mx-auto max-w-2xl mb-4 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                  {error.message || 'An error occurred. Please try again.'}
+                </div>
               )}
+
+              <Conversation className="max-w-2xl mx-auto">
+                <ConversationContent>
+                  {messages.length === 0 && !isLoading && (
+                    <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+                      <p className="text-sm">
+                        发一条消息开始工作。问答、工作流、代码、文档都可以。
+                      </p>
+                    </div>
+                  )}
+
+                  {messages.map((message, messageIndex) => (
+                    <Message key={message.id} from={message.role}>
+                      <MessageContent>
+                        {message.parts.map((part, partIndex) => (
+                          <PartRenderer
+                            // biome-ignore lint/suspicious/noArrayIndexKey: stable message parts
+                            key={`${message.id}-${partIndex}`}
+                            part={part}
+                            message={message}
+                            index={partIndex}
+                            status={chatStatusForUi}
+                            isLastMessage={messageIndex === messages.length - 1}
+                          />
+                        ))}
+                        {isLoading &&
+                          messageIndex === messages.length - 1 &&
+                          (message.role === 'user' ||
+                            (message.role === 'assistant' &&
+                              !message.parts.some((p) => p.type === 'text' && p.text))) && (
+                            <div className="flex items-center gap-2 py-2 text-muted-foreground">
+                              <LoadingDots size="md" label="Thinking" />
+                            </div>
+                          )}
+                      </MessageContent>
+                    </Message>
+                  ))}
+                </ConversationContent>
+              </Conversation>
             </div>
-          </>
-        )}
+
+            <div className="border-t border-border px-4 py-3 shrink-0">
+              <div className="max-w-2xl mx-auto">
+                <div className="flex items-end gap-2.5 border border-border rounded-xl p-2.5 bg-card focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/10 transition-all">
+                  <button
+                    type="button"
+                    className="size-8 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer shrink-0"
+                  >
+                    <Paperclip className="size-[18px]" />
+                  </button>
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={handleInput}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Continue the conversation..."
+                    rows={1}
+                    disabled={isLoading || !taskId || !projectId}
+                    // AIGC START
+                    className="flex-1 shrink-0 bg-transparent border-none outline-none text-[13px] resize-none min-h-[24px] max-h-[200px] placeholder:text-muted-foreground/50 leading-relaxed disabled:opacity-50"
+                    // AIGC END
+                  />
+                  {isLoading ? (
+                    <button
+                      type="button"
+                      onClick={() => void stopRun()}
+                      className="size-8 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center hover:bg-destructive/20 transition cursor-pointer shrink-0"
+                    >
+                      <Square className="size-[18px]" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSubmit}
+                      className="size-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center hover:bg-primary/90 transition cursor-pointer shrink-0"
+                    >
+                      <ArrowUp className="size-[18px]" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center justify-between mt-1.5 px-1">
+                  <span className="text-[10px] text-muted-foreground">
+                    <kbd className="font-mono text-[9px] bg-muted border border-border px-1 rounded">
+                      Enter
+                    </kbd>{' '}
+                    send
+                  </span>
+                  <span className="text-[10px] font-mono text-muted-foreground">
+                    {providerLabel}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {activeTab && (
+            <>
+              <div className="w-[3px] shrink-0 relative cursor-col-resize group flex items-center justify-center hover:bg-primary/10 transition-colors">
+                <div className="w-1 h-8 rounded-full bg-border group-hover:bg-muted-foreground transition-colors" />
+              </div>
+              <div
+                className={cn(
+                  'flex-1 flex flex-col min-w-0',
+                  activeTab === 'workflow' ? '' : 'bg-muted/30'
+                )}
+              >
+                {activeTab === 'preview' && (
+                  <WorkspacePreviewPanel projectId={projectId} refreshToken={status} />
+                )}
+                {activeTab === 'code' && (
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
+                      <Code className="size-4 text-muted-foreground" />
+                      <span className="text-[12px] font-mono text-muted-foreground">Code view</span>
+                    </div>
+                    <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+                      Code changes will appear here during agent execution.
+                    </div>
+                  </div>
+                )}
+                {activeTab === 'files' && (
+                  // AIGC START
+                  <WorkspaceFilesPanel projectId={projectId} refreshToken={status} />
+                  // AIGC END
+                )}
+                {activeTab === 'workflow' && <WorkflowPanel messages={messages} />}
+              </div>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </WorkflowDagProvider>
   );
 }

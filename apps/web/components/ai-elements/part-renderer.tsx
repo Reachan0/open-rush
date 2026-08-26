@@ -8,6 +8,7 @@ import { MessageResponse } from '@/components/ai-elements/message';
 import type { ToolRegistry } from './tool-registry';
 import { defaultToolRegistry } from './tools';
 import { GenericTool } from './tools/generic-tool';
+import { isWorkflowHiddenToolPart } from '@/lib/workflow-dag-model';
 
 type MessagePart = UIMessage['parts'][number];
 
@@ -71,6 +72,11 @@ export const PartRenderer = memo(
     // Dynamic tool invocations (Claude Code tools)
     if (part.type === 'dynamic-tool') {
       const toolPart = part as DynamicToolUIPart;
+      // AIGC START
+      if (isWorkflowHiddenToolPart(toolPart, message)) {
+        return null;
+      }
+      // AIGC END
       const toolName = toolPart.toolName;
       const Renderer = toolRegistry.getRenderer(toolName) ?? GenericTool;
 
@@ -111,6 +117,6 @@ export const PartRenderer = memo(
   },
   (prev, next) => {
     // Custom equality: only re-render if part or status changed
-    return prev.part === next.part && prev.status === next.status;
+    return prev.part === next.part && prev.status === next.status && prev.message === next.message;
   }
 );

@@ -2,6 +2,7 @@
 'use client';
 
 import {
+  isToolRunning,
   Tool,
   ToolContent,
   ToolHeader,
@@ -19,7 +20,7 @@ export function BashTool({ part }: ToolRendererProps) {
   const command = input?.command ?? '';
 
   return (
-    <Tool defaultOpen>
+    <Tool defaultOpen={isToolRunning(part.state)}>
       <ToolHeader
         type={part.type}
         state={part.state}

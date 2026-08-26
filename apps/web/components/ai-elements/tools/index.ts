@@ -3,6 +3,7 @@ import { BashTool } from './bash-tool';
 import { EditTool } from './edit-tool';
 import { GenericTool } from './generic-tool';
 import { ReadTool } from './read-tool';
+import { WorkflowPlanTool } from './workflow-plan-tool';
 import { WriteTool } from './write-tool';
 
 /**
@@ -32,6 +33,9 @@ export const defaultToolRegistry = createToolRegistry({
   glob: ReadTool,
   ls: ReadTool,
   grep: BashTool,
+  // AIGC START
+  'workflow.plan': WorkflowPlanTool,
+  // AIGC END
 });
 
 export { BashTool } from './bash-tool';

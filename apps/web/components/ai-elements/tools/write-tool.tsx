@@ -2,6 +2,7 @@
 'use client';
 
 import {
+  isToolRunning,
   Tool,
   ToolContent,
   ToolHeader,
@@ -15,7 +16,7 @@ export function WriteTool({ part }: ToolRendererProps) {
   const filePath = input?.file_path ?? input?.path ?? input?.filePath ?? '';
 
   return (
-    <Tool defaultOpen>
+    <Tool defaultOpen={isToolRunning(part.state)}>
       <ToolHeader
         type={part.type}
         state={part.state}

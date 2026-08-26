@@ -182,7 +182,7 @@ describe('without requestedAgentId, no agents at all', () => {
         projectId: PROJECT_ID,
         scope: 'project',
         status: 'active',
-        name: 'Web Builder',
+        name: 'OpenRush',
         maxSteps: 30,
         deliveryMode: 'workspace',
         createdBy: USER_ID,

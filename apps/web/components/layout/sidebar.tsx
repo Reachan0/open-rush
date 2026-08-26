@@ -1,9 +1,19 @@
 'use client';
 
-import { Layers, LogOut, MessageSquare, Plus, Rss, Settings, Wrench } from 'lucide-react';
+import {
+  FolderKanban,
+  Layers,
+  LogOut,
+  MessageSquare,
+  Plus,
+  Rss,
+  Settings,
+  Wrench,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { resolveActiveProjectId, writeActiveProjectId } from '@/lib/active-project';
 import { cn } from '@/lib/utils';
 
 interface SidebarUser {
@@ -17,6 +27,8 @@ interface ConversationItem {
   title: string | null;
   projectId: string;
   taskId: string | null;
+  agentId: string | null;
+  agentName: string | null;
   updatedAt: string;
 }
 
@@ -26,61 +38,102 @@ interface SidebarProps {
 }
 
 const navBuild = [
-  { href: '/studio', icon: Layers, label: 'Agent Studio' },
-  { href: '/skills', icon: Wrench, label: 'Skills' },
-  { href: '/mcps', icon: Rss, label: 'MCP Servers' },
+  { href: '/dashboard', icon: FolderKanban, label: 'Projects', match: ['/dashboard', '/projects'] },
+  { href: '/studio', icon: Layers, label: 'Agent Studio', match: ['/studio'] },
+  { href: '/skills', icon: Wrench, label: 'Skills', match: ['/skills'] },
+  { href: '/mcps', icon: Rss, label: 'MCP Servers', match: ['/mcps'] },
 ];
 
-export function Sidebar({ user }: SidebarProps) {
+export function Sidebar({ user, projects = [] }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const initials = (user.name ?? user.email ?? '?').slice(0, 2).toUpperCase();
+  const pathProjectId = pathname.startsWith('/projects/') ? (pathname.split('/')[2] ?? null) : null;
 
-  // ---------------------------------------------------------------------------
-  // Load conversations (flat task list)
-  // ---------------------------------------------------------------------------
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(projects[0]?.id ?? null);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-fetch on route change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chat routes keep the same path but change ?projectId=
   useEffect(() => {
-    fetch('/api/projects/default')
+    const urlProjectId =
+      pathProjectId ?? new URLSearchParams(window.location.search).get('projectId');
+    const nextId = resolveActiveProjectId(projects, urlProjectId);
+    setActiveProjectId(nextId);
+    if (nextId) writeActiveProjectId(nextId);
+  }, [projects, pathProjectId, pathname]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-fetch when route changes (new chat created)
+  useEffect(() => {
+    if (!activeProjectId) {
+      setConversations([]);
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+    fetch(`/api/conversations?projectId=${activeProjectId}`)
       .then((r) => r.json())
       .then((res) => {
-        if (res.success && res.data?.id) {
-          return fetch(`/api/conversations?projectId=${res.data.id}`);
-        }
-        return null;
-      })
-      .then((r) => r?.json())
-      .then((res) => {
-        if (res?.success) {
-          setConversations(
-            (res.data ?? []).map((c: Record<string, unknown>) => ({
-              id: c.id as string,
-              title: c.title as string | null,
-              projectId: c.projectId as string,
-              taskId: (c.taskId as string | null) ?? null,
-              updatedAt: c.updatedAt as string,
-            }))
-          );
-        }
+        if (cancelled || !res?.success) return;
+        setConversations(
+          (res.data ?? []).map((c: Record<string, unknown>) => ({
+            id: c.id as string,
+            title: c.title as string | null,
+            projectId: c.projectId as string,
+            taskId: (c.taskId as string | null) ?? null,
+            agentId: (c.agentId as string | null) ?? null,
+            agentName: (c.agentName as string | null) ?? null,
+            updatedAt: c.updatedAt as string,
+          }))
+        );
       })
       .catch(() => {})
-      .finally(() => setIsLoading(false));
-  }, [pathname]); // Re-fetch when route changes (e.g. new chat created)
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, pathname]);
 
   const activeConvId = pathname.startsWith('/chat/') ? pathname.split('/')[2] : undefined;
+  const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
 
-  const handleNewChat = useCallback(async () => {
-    router.push('/');
-  }, [router]);
+  const handleProjectChange = useCallback(
+    (projectId: string) => {
+      writeActiveProjectId(projectId);
+      setActiveProjectId(projectId);
+      if (pathname === '/') {
+        router.push(`/?projectId=${projectId}`);
+        return;
+      }
+      if (pathname.startsWith('/dashboard') || pathname.startsWith('/projects/')) {
+        router.push(`/projects/${projectId}`);
+      }
+    },
+    [pathname, router]
+  );
+
+  const handleNewChat = useCallback(() => {
+    const href = activeProjectId ? `/?projectId=${activeProjectId}` : '/';
+    router.push(href);
+  }, [activeProjectId, router]);
 
   const handleConvClick = useCallback(
     (conv: ConversationItem) => {
+      writeActiveProjectId(conv.projectId);
       const params = new URLSearchParams({ projectId: conv.projectId });
       if (conv.taskId) {
         params.set('taskId', conv.taskId);
+      }
+      if (conv.agentId) {
+        params.set('agentId', conv.agentId);
+      }
+      if (conv.agentName) {
+        params.set('agent', conv.agentName);
       }
       router.push(`/chat/${conv.id}?${params.toString()}`);
     },
@@ -89,7 +142,6 @@ export function Sidebar({ user }: SidebarProps) {
 
   return (
     <aside className="sidebar-wrap w-[256px] shrink-0 bg-card rounded-xl shadow-[0_0_0_1px_rgba(0,0,0,0.06)] flex flex-col p-3 gap-0.5 overflow-hidden max-md:hidden">
-      {/* Brand — click to go home */}
       <Link
         href="/"
         className="flex items-center gap-2.5 px-2 py-2 mb-2 rounded-lg hover:bg-accent/50 transition-all"
@@ -103,7 +155,49 @@ export function Sidebar({ user }: SidebarProps) {
         </span>
       </Link>
 
-      {/* New Chat */}
+      {/* AIGC START */}
+      <div className="flex items-center gap-1 mb-1">
+        {projects.length > 0 ? (
+          <label className="flex-1 min-w-0">
+            <span className="sr-only">Current project</span>
+            <select
+              value={activeProjectId ?? ''}
+              onChange={(e) => handleProjectChange(e.target.value)}
+              className="h-8 w-full rounded-lg border border-border bg-background px-2 text-[12px] text-foreground"
+            >
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <Link
+            href="/projects/new"
+            className="flex-1 h-8 inline-flex items-center justify-center rounded-lg border border-dashed border-border text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent/30"
+          >
+            Create a project
+          </Link>
+        )}
+        <Link
+          href="/projects/new"
+          className="size-8 shrink-0 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          aria-label="New project"
+          title="New project"
+        >
+          <Plus className="size-4" />
+        </Link>
+      </div>
+      <Link
+        href={activeProject ? `/projects/${activeProject.id}` : '/dashboard'}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] text-muted-foreground hover:bg-accent/50 hover:text-foreground mb-1"
+      >
+        <FolderKanban className="size-3.5 shrink-0" />
+        <span className="truncate">{activeProject ? 'Open project' : 'All projects'}</span>
+      </Link>
+      {/* AIGC END */}
+
       <button
         type="button"
         onClick={handleNewChat}
@@ -113,7 +207,8 @@ export function Sidebar({ user }: SidebarProps) {
         New Chat
       </button>
 
-      {/* Conversation list (flat) */}
+      <div className="h-px bg-border mx-1 my-1" />
+
       <div className="flex-1 overflow-y-auto custom-scrollbar mt-1">
         {isLoading ? (
           <div className="px-3 py-4 text-[12px] text-muted-foreground text-center">Loading...</div>
@@ -136,19 +231,25 @@ export function Sidebar({ user }: SidebarProps) {
                 )}
               >
                 <MessageSquare className="size-4 shrink-0" />
-                <span className="truncate">{conv.title || 'New Chat'}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{conv.title || 'New Chat'}</span>
+                  {conv.agentName ? (
+                    <span className="block truncate text-[11px] font-normal text-muted-foreground">
+                      {conv.agentName}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Build nav — bottom */}
       <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground px-3 pt-3 pb-1">
         Build
       </div>
       {navBuild.map((item) => {
-        const isActive = pathname.startsWith(item.href);
+        const isActive = item.match.some((prefix) => pathname.startsWith(prefix));
         return (
           <Link
             key={item.href}
@@ -166,7 +267,6 @@ export function Sidebar({ user }: SidebarProps) {
         );
       })}
 
-      {/* Separator + User */}
       <div className="h-px bg-border mx-1 my-1" />
       <div className="flex items-center gap-2.5 px-2 py-1.5">
         <div className="size-7 rounded-full bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center text-[11px] font-semibold text-white shrink-0">
@@ -177,12 +277,13 @@ export function Sidebar({ user }: SidebarProps) {
           <div className="text-[11px] text-muted-foreground">Admin</div>
         </div>
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className="size-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition cursor-pointer"
+          <Link
+            href={activeProject ? `/projects/${activeProject.id}/settings` : '/dashboard'}
+            className="size-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-accent/50 transition"
+            aria-label="Project settings"
           >
             <Settings className="size-4" />
-          </button>
+          </Link>
           <form action="/api/auth/signout" method="POST">
             <button
               type="submit"

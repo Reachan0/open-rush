@@ -6,10 +6,31 @@ import {
   resolveSystemPrompt,
   validateProjectId,
 } from '@lux/prompts';
-import { resolveAgentRuntime, runDshToUIMessageStream } from '@open-rush/agent-runtime';
+import {
+  parseAgentRuntimeKind,
+  resolveAgentRuntime,
+  runDshToUIMessageStream,
+} from '@open-rush/agent-runtime';
+import {
+  chooseLane,
+  createPlatformToolInvoker,
+  createTravelToolInvoker,
+  type LlmComplete,
+  llmCompleteFromEnv,
+  mergeToolInvokers,
+  type ToolInvoker,
+  WEEKEND_TRIP_INTENT,
+  weekendTripDsl,
+  workflowGraph,
+  workflowRun,
+} from '@open-rush/workflow';
 import { streamText } from 'ai';
 import { claudeCode } from 'ai-sdk-provider-claude-code';
 import { Hono } from 'hono';
+import { tryConnectAmapFromEnv } from './amap-mcp.js';
+import { resolveWorkflowWorkspace, tryConnectCodingTools } from './coding-mcp.js';
+import { WORKFLOW_LIVE_HTML } from './workflow-live-page.js';
+import { workflowRunToSseResponse } from './workflow-ui-stream.js';
 
 const app = new Hono();
 
@@ -33,6 +54,45 @@ function withStreamCleanup(response: Response, onDone: () => void): Response {
     status: response.status,
     headers: response.headers,
   });
+}
+// AIGC END
+
+// AIGC START
+let amapToolsPromise: Promise<ToolInvoker | null> | undefined;
+const codingToolsByRoot = new Map<string, Promise<ToolInvoker | null>>();
+
+function getAmapTools(): Promise<ToolInvoker | null> {
+  amapToolsPromise ??= tryConnectAmapFromEnv();
+  return amapToolsPromise;
+}
+
+function getCodingTools(workspace: string): Promise<ToolInvoker | null> {
+  const root = resolveWorkflowWorkspace(workspace);
+  const cached = codingToolsByRoot.get(root);
+  if (cached) return cached;
+  const pending = tryConnectCodingTools(root);
+  codingToolsByRoot.set(root, pending);
+  return pending;
+}
+
+async function workflowCatalog(options: {
+  root: string;
+  complete?: LlmComplete;
+  userIntent?: string;
+  delayMs?: number;
+}): Promise<ToolInvoker> {
+  const workspace = resolveWorkflowWorkspace(options.root);
+  const platform = createPlatformToolInvoker({
+    root: workspace,
+    complete: options.complete,
+    userIntent: options.userIntent,
+  });
+  const [amap, coding] = await Promise.all([getAmapTools(), getCodingTools(workspace)]);
+  const extras: ToolInvoker[] = [];
+  if (amap) extras.push(amap);
+  else extras.push(createTravelToolInvoker({ delayMs: options.delayMs }));
+  if (coding) extras.push(coding);
+  return mergeToolInvokers([platform, ...extras]);
 }
 // AIGC END
 
@@ -61,6 +121,9 @@ app.post('/prompt', async (c) => {
     maxTurns,
     projectId,
     agentConfig,
+    // AIGC START
+    runtime: requestedRuntime,
+    // AIGC END
   } = body as {
     prompt?: string;
     sessionId?: string;
@@ -72,6 +135,9 @@ app.post('/prompt', async (c) => {
     maxTurns?: number;
     projectId?: string;
     agentConfig?: PromptAgentConfig;
+    // AIGC START
+    runtime?: string;
+    // AIGC END
   };
 
   // Support both prompt (direct) and messages (AI SDK useChat) formats
@@ -121,21 +187,58 @@ app.post('/prompt', async (c) => {
     }
 
     // Model from env: DSH_MODEL / CLAUDE_MODEL / ANTHROPIC_MODEL (Bedrock ARN) or fallback
-    const runtime = resolveAgentRuntime();
+    // AIGC START
+    const runtime = parseAgentRuntimeKind(requestedRuntime) ?? resolveAgentRuntime();
     const effectiveModelId =
       modelId ??
-      process.env.DSH_MODEL ??
-      process.env.CLAUDE_MODEL ??
-      process.env.ANTHROPIC_MODEL ??
-      (runtime === 'dsh' ? 'deepseek-v4-flash' : 'sonnet');
+      (runtime === 'dsh'
+        ? (process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8')
+        : (process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'sonnet'));
+    // AIGC END
     const providerEnv: Record<string, string> = {
       ...(env ?? {}),
       ...(process.env.ANTHROPIC_BASE_URL && { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL }),
       ...(process.env.ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }),
+      // AIGC START
+      ...(process.env.DEEPSEEK_API_KEY && { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY }),
+      ...(process.env.DEEPSEEK_BASE_URL && { DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL }),
+      ...(process.env.NODE_TLS_REJECT_UNAUTHORIZED && {
+        NODE_TLS_REJECT_UNAUTHORIZED: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
+      }),
+      // AIGC END
     };
 
     // AIGC START
     const workspaceCwd = projectPath ?? process.cwd();
+    const complete = llmCompleteFromEnv();
+
+    if (chooseLane(userPrompt) === 'workflow') {
+      try {
+        const tools = await workflowCatalog({
+          root: workspaceCwd,
+          complete,
+          userIntent: userPrompt,
+        });
+        return withStreamCleanup(
+          workflowRunToSseResponse((sink) =>
+            workflowRun({
+              intent: userPrompt,
+              tools,
+              complete,
+              allowHeuristic: !complete,
+              disableFallback: true,
+              signal: abortController.signal,
+              sink,
+            })
+          ),
+          () => activeSessions.delete(sid)
+        );
+      } catch (err) {
+        console.warn(
+          `[Workflow] falling back to ${runtime}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
 
     if (runtime === 'dsh') {
       const response = runDshToUIMessageStream({
@@ -180,6 +283,140 @@ app.post('/prompt', async (c) => {
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ error: message }, 500);
   }
+});
+
+app.get('/workflow-live', (c) => {
+  c.header('Cache-Control', 'no-store');
+  return c.html(WORKFLOW_LIVE_HTML);
+});
+// AIGC START
+app.get('/workflow-catalog', async (c) => {
+  const complete = llmCompleteFromEnv();
+  const tools = await workflowCatalog({ root: process.cwd(), complete });
+  const names = (await tools.listTools()).map((tool) => tool.name);
+  return c.json({
+    amap: names.some((name) => name.toLowerCase().startsWith('amap-maps__')),
+    coding: names.some((name) => name.toLowerCase().startsWith('coding-tools__')),
+    tools: names,
+  });
+});
+// AIGC END
+/** Fixture graph for debugging only. Live runs emit `workflow-graph` after planning. */
+app.get('/workflow-graph', (c) => c.json(workflowGraph(weekendTripDsl())));
+
+function sseStream(
+  run: (send: (event: { eventType: string; payload: unknown }) => Promise<void>) => Promise<void>
+): Response {
+  const encoder = new TextEncoder();
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const send = async (event: { eventType: string; payload: unknown }) => {
+    try {
+      await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    } catch {
+      // client disconnected
+    }
+  };
+  void (async () => {
+    const ping = setInterval(() => {
+      void writer.write(encoder.encode(`: ping ${Date.now()}\n\n`)).catch(() => undefined);
+    }, 5000);
+    try {
+      await writer.write(encoder.encode(': connected\n\n'));
+      await run(send);
+    } catch (err) {
+      await send({
+        eventType: 'workflow-error',
+        payload: { error: err instanceof Error ? err.message : String(err) },
+      });
+    } finally {
+      clearInterval(ping);
+      try {
+        await writer.close();
+      } catch {
+        // already closed
+      }
+    }
+  })();
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+app.post('/workflow-run', async (c) => {
+  // AIGC START
+  const body = (await c.req.json()) as {
+    prompt?: string;
+    intent?: string;
+    dsl?: unknown;
+    disableFallback?: boolean;
+    runId?: string;
+    delayMs?: number;
+  };
+  const intent = body.intent ?? body.prompt;
+  if (!intent && !body.dsl) {
+    return c.json({ error: 'intent or dsl is required' }, 400);
+  }
+  const delayMs = Number.isFinite(body.delayMs) ? Number(body.delayMs) : 0;
+  const complete = llmCompleteFromEnv();
+  const tools = await workflowCatalog({
+    root: process.cwd(),
+    complete,
+    userIntent: intent,
+    delayMs,
+  });
+  const stream = c.req.query('stream') === '1';
+
+  if (stream) {
+    console.log(`[workflow-run] stream start intent=${JSON.stringify(intent ?? '').slice(0, 80)}`);
+    return sseStream(async (send) => {
+      if (body.dsl) {
+        try {
+          await send({
+            eventType: 'workflow-graph',
+            payload: workflowGraph(body.dsl as ReturnType<typeof weekendTripDsl>),
+          });
+        } catch {
+          // engine will emit a graph after validation, or fallback
+        }
+      }
+      const result = await workflowRun({
+        intent: intent ?? WEEKEND_TRIP_INTENT,
+        dsl: body.dsl,
+        tools,
+        complete,
+        allowHeuristic: !complete,
+        disableFallback: body.disableFallback,
+        sink: { emit: send },
+      });
+      await send({
+        eventType: 'workflow-result',
+        payload: {
+          output: result.ok ? result.output : undefined,
+          ok: result.ok,
+          degraded: result.degraded,
+          error: 'error' in result ? result.error : undefined,
+          rounds: result.rounds,
+        },
+      });
+    });
+  }
+
+  const result = await workflowRun({
+    intent,
+    dsl: body.dsl,
+    tools,
+    complete,
+    allowHeuristic: !complete,
+    disableFallback: body.disableFallback,
+  });
+  return c.json({ ...result, runId: body.runId ?? null });
+  // AIGC END
 });
 
 app.post('/abort', async (c) => {

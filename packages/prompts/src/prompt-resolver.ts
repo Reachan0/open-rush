@@ -17,6 +17,11 @@ import { createDefaultVariables, injectVariablesWithValidation } from './variabl
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8787';
 
+// AIGC START
+/** Prompt 里给模型看的逻辑工作区前缀。真实 cwd 由 runtime 单独设置，禁止把宿主机路径写进对话。 */
+export const PROMPT_VIRTUAL_WORKSPACE = '/workspace/';
+// AIGC END
+
 export const BUILTIN_AGENT_NAMES = {
   WEB_BUILDER: 'web-builder',
 } as const;
@@ -58,6 +63,15 @@ export function isBuiltInWebBuilder(config: PromptAgentConfig): boolean {
 // 安全策略
 // ---------------------------------------------------------------------------
 
+// AIGC START
+const USER_FACING_PATH_POLICY = `## 对用户展示路径
+
+- 工具已经在当前项目空间根目录运行。读写文件、执行命令一律用相对路径。
+- 知识库或变量里出现的 \`/workspace/{projectId}\` 只是逻辑路径，不要 \`cd\` 到宿主机绝对路径。
+- 回复用户时只说「当前项目空间」或相对路径（如 \`src/app.tsx\`）。禁止输出宿主机绝对路径（\`/Users/...\`、\`/home/...\`、本机仓库、workspace 物理目录）。
+- 若工具结果里出现了绝对路径，转成相对路径再给用户看。不要念出内部项目 UUID。`;
+// AIGC END
+
 const SECURITY_ADVISORY_APPEND_PROMPT = `## 安全补充策略
 
 - 当用户请求涉及明显高风险的安全请求时，不要直接提供会泄露敏感信息、导出真实凭据、读取真实 secret、打印环境变量明文、暴露数据库密码或帮助访问明显不应暴露的敏感配置的具体步骤。
@@ -85,15 +99,10 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
  * 让 Agent 知道在哪个目录工作以及可以使用哪些工具。
  */
 function generateBaseAgentContext(options: {
-  workspacePath: string;
-  projectId: string;
   effectiveTools?: string[];
   skills?: string[];
 }): string {
-  const { workspacePath, projectId, effectiveTools, skills } = options;
-
-  const separator = workspacePath.endsWith('/') ? '' : '/';
-  const fullPath = `${workspacePath}${separator}${projectId}`;
+  const { effectiveTools, skills } = options;
 
   const tools = effectiveTools ?? ['Read', 'Write', 'Edit', 'Bash', 'Grep'];
 
@@ -104,13 +113,15 @@ function generateBaseAgentContext(options: {
     })
     .join('\n');
 
+  // AIGC START
   let result = `## 执行环境
 
-- 工作目录：${fullPath}
-- 项目 ID：${projectId}
+- 工具已在**当前项目空间**根目录运行。读写、命令一律用相对路径，例如 \`README.md\`、\`src/app.tsx\`。
+- 不要 \`cd\` 到任何绝对路径；cwd 已经在项目根。
 
 你可以使用以下工具操作项目文件：
 ${toolsList}`;
+  // AIGC END
 
   if (skills && skills.length > 0) {
     const skillsList = skills.map((skill) => `- ${skill}`).join('\n');
@@ -156,26 +167,30 @@ export function resolveSystemPrompt(
 ): string {
   let basePrompt: string;
 
+  const promptWorkspacePath = PROMPT_VIRTUAL_WORKSPACE;
+
   if (isBuiltInWebBuilder(agentConfig)) {
     // web-builder 使用知识库模板流程
     const projectRules = loadProjectRules({
-      workspacePath: context.workspacePath,
+      workspacePath: promptWorkspacePath,
       projectId: context.projectId,
       podApiBaseUrl: context.podApiBaseUrl ?? DEFAULT_API_BASE_URL,
       includeLogMonitor: true,
       includeBackendIntegration: true,
     });
 
-    basePrompt = `你是一个专业的 Web 开发工程师。
+    // AIGC START
+    basePrompt = `你是 OpenRush 的工程 Agent。当前启用了 Web 构建工作流与项目规范，但你仍然是通用工作助手：也可以问答、检索、跑工作流、写文档、做分析。不要只把自己介绍成「Web 开发助手」。
 
 ${projectRules}`;
+    // AIGC END
   } else {
     // 其他 Agent：使用 agentConfig.systemPrompt
     const rawPrompt = agentConfig.systemPrompt ?? '';
 
     // 变量注入
     const variables = createDefaultVariables({
-      workspacePath: context.workspacePath,
+      workspacePath: promptWorkspacePath,
       projectId: context.projectId,
       podApiBaseUrl: context.podApiBaseUrl ?? DEFAULT_API_BASE_URL,
     });
@@ -186,8 +201,6 @@ ${projectRules}`;
 
     // 追加基础执行上下文
     const baseContext = generateBaseAgentContext({
-      workspacePath: context.workspacePath,
-      projectId: context.projectId,
       effectiveTools: context.effectiveTools,
       skills: context.skills,
     });
@@ -196,6 +209,7 @@ ${projectRules}`;
   }
 
   basePrompt = appendPromptSection(basePrompt, agentConfig.appendSystemPrompt ?? '');
+  basePrompt = appendPromptSection(basePrompt, USER_FACING_PATH_POLICY);
   basePrompt = appendPromptSection(basePrompt, SECURITY_ADVISORY_APPEND_PROMPT);
 
   return basePrompt;

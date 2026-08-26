@@ -44,6 +44,12 @@ importers:
       '@open-rush/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@open-rush/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
+      '@open-rush/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
       ai:
         specifier: ^6.0.159
         version: 6.0.168(zod@3.25.76)
@@ -121,9 +127,6 @@ importers:
       '@base-ui/react':
         specifier: ^1.3.0
         version: 1.4.0(@date-fns/tz@1.4.1)(@types/react@19.2.14)(date-fns@4.1.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@lux/prompts':
-        specifier: workspace:*
-        version: link:../../packages/prompts
       '@open-rush/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -606,6 +609,28 @@ importers:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(jiti@2.6.1)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.0
+        version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@25.6.0)(msw@2.13.2(@types/node@25.6.0)(typescript@5.9.3))(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
+
+  packages/workflow:
+    dependencies:
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.3)
+      tsx:
+        specifier: ^4.20.0
+        version: 4.21.0
       typescript:
         specifier: ^5.8.0
         version: 5.9.3

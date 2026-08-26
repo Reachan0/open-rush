@@ -7,6 +7,7 @@ export {
 export {
   BUILTIN_AGENT_NAMES,
   isBuiltInWebBuilder,
+  PROMPT_VIRTUAL_WORKSPACE,
   type PromptAgentConfig,
   type PromptResolverContext,
   resolveSystemPrompt,

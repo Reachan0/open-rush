@@ -1,7 +1,7 @@
 // AIGC START
 'use client';
 
-import { FileText, RefreshCw } from 'lucide-react';
+import { FileText, GitBranch, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { WorkspaceNode } from '@/lib/workspace-types';
@@ -71,6 +71,8 @@ export function WorkspaceFilesPanel({
   const [file, setFile] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState('');
+  const [cloning, setCloning] = useState(false);
 
   const loadTree = useCallback(async () => {
     void refreshToken;
@@ -112,6 +114,27 @@ export function WorkspaceFilesPanel({
     [projectId]
   );
 
+  const cloneRepo = useCallback(async () => {
+    if (!projectId || !repoUrl.trim()) return;
+    setCloning(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/clone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoUrl: repoUrl.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? '克隆失败');
+      setRepoUrl('');
+      await loadTree();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '克隆失败');
+    } finally {
+      setCloning(false);
+    }
+  }, [projectId, repoUrl, loadTree]);
+
   if (!projectId) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -134,12 +157,32 @@ export function WorkspaceFilesPanel({
           <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
         </button>
       </div>
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+        <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          value={repoUrl}
+          onChange={(e) => setRepoUrl(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void cloneRepo();
+          }}
+          placeholder="https://github.com/org/repo.git"
+          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[11px] outline-none focus:border-ring"
+        />
+        <button
+          type="button"
+          onClick={() => void cloneRepo()}
+          disabled={cloning || !repoUrl.trim()}
+          className="h-7 shrink-0 rounded-md bg-foreground px-2.5 text-[11px] font-medium text-background disabled:opacity-50"
+        >
+          {cloning ? '克隆中…' : '克隆'}
+        </button>
+      </div>
       <div className="flex min-h-0 flex-1">
         <div className="w-[42%] overflow-y-auto border-r border-border p-3">
           {error && <p className="mb-2 text-[12px] text-destructive">{error}</p>}
           {tree.length === 0 && !loading ? (
             <p className="text-[12px] text-muted-foreground">
-              工作区还是空的。让 Agent 创建文件后点刷新。
+              工作区还是空的。可以在上方克隆 Git 仓库，或让 Agent 创建文件后点刷新。
             </p>
           ) : (
             <FileTreeNodes nodes={tree} selectedPath={selectedPath} onSelect={openFile} />

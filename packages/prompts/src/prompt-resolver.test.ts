@@ -39,7 +39,7 @@ describe('prompt-resolver', () => {
       };
       const result = resolveSystemPrompt(config, context);
 
-      expect(result).toContain('你是一个专业的 Web 开发工程师');
+      expect(result).toContain('你是 OpenRush 的工程 Agent');
       expect(result).toContain('项目创建规范');
       expect(result).toContain('安全补充策略');
       // Variables should be injected
@@ -103,7 +103,24 @@ describe('prompt-resolver', () => {
       const result = resolveSystemPrompt(config, context);
 
       expect(result).toContain('执行环境');
+      expect(result).toContain('当前项目空间');
       expect(result).toContain('安全补充策略');
+    });
+
+    it('must not leak host filesystem paths into the system prompt', () => {
+      const hostContext: PromptResolverContext = {
+        projectId: '08b9575d-c094-4ab4-9987-1dc207de4d6b',
+        workspacePath: '/Users/alice/projects/acme/workspace/',
+      };
+      const result = resolveSystemPrompt(
+        { name: 'OpenRush', systemPrompt: '你是助手。能动手完成的事先用工具做。' },
+        hostContext
+      );
+
+      expect(result).not.toContain('/Users/alice');
+      expect(result).not.toContain('acme');
+      expect(result).toContain('当前项目空间');
+      expect(result).toContain('禁止输出宿主机绝对路径');
     });
   });
 });

@@ -25,12 +25,10 @@ import {
 } from '@/components/ui/dialog';
 import type { MultiSelectOption } from '@/components/ui/multi-select';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+  ACTIVE_PROJECT_CHANGE_EVENT,
+  readActiveProjectId,
+  resolveActiveProjectId,
+} from '@/lib/active-project';
 import { archiveAgentDefinition } from '@/lib/api/archive-agent';
 import { fetchAllV1 } from '@/lib/api/v1-list';
 
@@ -120,6 +118,15 @@ export function AgentStudioClient({ projects }: AgentStudioClientProps) {
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId]
   );
+
+  useEffect(() => {
+    const sync = () => {
+      setSelectedProjectId(resolveActiveProjectId(projects, readActiveProjectId()));
+    };
+    sync();
+    window.addEventListener(ACTIVE_PROJECT_CHANGE_EVENT, sync);
+    return () => window.removeEventListener(ACTIVE_PROJECT_CHANGE_EVENT, sync);
+  }, [projects]);
 
   const load = useCallback(async () => {
     if (!selectedProjectId) {
@@ -266,25 +273,12 @@ export function AgentStudioClient({ projects }: AgentStudioClientProps) {
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Agent Studio</h1>
           <p className="text-sm text-muted-foreground">
-            Browse project agents, switch the default runtime, and create new agents in a modal.
+            {selectedProject
+              ? `Editing agents in ${selectedProject.name}. Switch projects from the sidebar.`
+              : 'Select a project in the sidebar, then create agents here.'}
           </p>
         </div>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
-          <Select
-            value={selectedProjectId ?? undefined}
-            onValueChange={(value) => setSelectedProjectId(value)}
-          >
-            <SelectTrigger className="min-w-60">
-              <SelectValue placeholder="Select a project" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <Button onClick={openCreateDialog} disabled={!selectedProjectId}>
             <Plus className="mr-2 h-4 w-4" />
             Create Agent

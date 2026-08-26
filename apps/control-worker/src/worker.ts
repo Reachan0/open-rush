@@ -95,11 +95,11 @@ async function main() {
 
   console.log('Control worker started');
 
-  await boss.work<{ runId: string; prompt: string; agentId: string }>(
+  await boss.work<{ runId: string; prompt: string; agentId: string; runtime?: string }>(
     'run/execute',
     async ([job]) => {
       if (!job) return;
-      const { runId, agentId } = job.data;
+      const { runId, agentId, runtime } = job.data;
       if (!runId || !agentId) {
         console.error('run/execute job missing runId or agentId', job.data);
         return;
@@ -117,7 +117,9 @@ async function main() {
       }
 
       console.log(`Processing run/execute — runId=${runId}, agentId=${agentId}`);
-      await orchestrator.execute(runId, prompt, agentId);
+      await orchestrator.execute(runId, prompt, agentId, {
+        runtime: runtime === 'dsh' || runtime === 'claude-code' ? runtime : undefined,
+      });
       console.log(`Completed run/execute — runId=${runId}`);
     }
   );

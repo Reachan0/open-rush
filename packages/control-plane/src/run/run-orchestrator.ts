@@ -52,7 +52,12 @@ export class RunOrchestrator {
    * Follow-up runs attempt to restore from the parent's checkpoint.
    * If the parent sandbox is gone, degrades to a fresh initial run.
    */
-  async execute(runId: string, prompt: string, agentId: string): Promise<void> {
+  async execute(
+    runId: string,
+    prompt: string,
+    agentId: string,
+    extras?: { runtime?: string }
+  ): Promise<void> {
     const run = await this.deps.runService.getById(runId);
     const isFollowUp = run?.parentRunId != null;
     let sandboxId: string | null = null;
@@ -131,6 +136,12 @@ export class RunOrchestrator {
         allowedTools: agentContext?.agentConfig.allowedTools,
         maxTurns: agentContext?.agentConfig.maxSteps,
         projectId: agentContext?.projectId,
+        runtime:
+          extras?.runtime === 'dsh' || extras?.runtime === 'claude-code'
+            ? extras.runtime
+            : run?.provider === 'dsh'
+              ? 'dsh'
+              : undefined,
         agentConfig: agentContext
           ? {
               name: agentContext.agentConfig.name,

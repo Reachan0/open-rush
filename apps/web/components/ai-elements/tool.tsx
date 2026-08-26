@@ -41,6 +41,11 @@ export type ToolHeaderProps = {
     }
 );
 
+// AIGC START
+export const isToolRunning = (state: ToolPart['state'] | undefined): boolean =>
+  state === 'input-available' || state === 'input-streaming' || state === 'approval-requested';
+// AIGC END
+
 const statusLabels: Record<ToolPart['state'], string> = {
   'approval-requested': 'Awaiting Approval',
   'approval-responded': 'Responded',

@@ -92,6 +92,10 @@ export const createRunRequestSchema = z.object({
     .optional(),
   parentRunId: z.string().uuid().optional(),
   modelId: z.string().optional(),
+  // AIGC START
+  /** Per-run agent engine. Omitted → worker uses AGENT_RUNTIME. */
+  runtime: z.enum(['dsh', 'claude-code']).optional(),
+  // AIGC END
 });
 export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;
 

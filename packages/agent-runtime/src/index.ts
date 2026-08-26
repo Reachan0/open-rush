@@ -14,7 +14,12 @@ export {
 } from './claude-code-provider.js';
 export { DshEventMapper } from './dsh-event-mapper.js';
 export { DshJsonRpcClient } from './dsh-jsonrpc-client.js';
-export { buildDshChildEnv, resolveAgentRuntime, resolveDshLaunch } from './dsh-launch.js';
+export {
+  buildDshChildEnv,
+  parseAgentRuntimeKind,
+  resolveAgentRuntime,
+  resolveDshLaunch,
+} from './dsh-launch.js';
 export { runDshToUIMessageStream } from './dsh-runtime.js';
 export type {
   AgentRuntimeKind,

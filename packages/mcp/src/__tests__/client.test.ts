@@ -80,6 +80,8 @@ describe('HttpMcpClient', () => {
       const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe('http://localhost:3000/mcp');
       expect(init?.method).toBe('POST');
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Accept).toContain('text/event-stream');
 
       const body = JSON.parse(init?.body as string);
       expect(body.method).toBe('initialize');
@@ -87,6 +89,27 @@ describe('HttpMcpClient', () => {
       expect(body.params.protocolVersion).toBe('2024-11-05');
       expect(body.params.clientInfo.name).toBe('lux-mcp-client');
     });
+
+    // AIGC START
+    it('parses streamable HTTP SSE initialize responses', async () => {
+      const payload = JSON.stringify({
+        jsonrpc: '2.0',
+        result: { protocolVersion: '2024-11-05' },
+        id: 1,
+      });
+      mockFetch.mockResolvedValueOnce(
+        new Response(`event: message\ndata: ${payload}\n\n`, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      );
+
+      const client = new HttpMcpClient(
+        makeConfig({ transport: 'streamable-http', url: 'http://localhost:3000/mcp' })
+      );
+      await expect(client.connect()).resolves.toBeUndefined();
+    });
+    // AIGC END
   });
 
   describe('listTools()', () => {

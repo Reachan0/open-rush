@@ -36,7 +36,7 @@ const BUILTIN_AGENTS: AgentConfig[] = [
     name: 'web-builder',
     scope: 'builtin',
     status: 'active',
-    description: 'Build and iterate on web applications in the project workspace.',
+    description: 'General work agent for chat, workflows, code, docs, and MCP tools.',
     icon: 'code',
     systemPrompt: null,
     allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],

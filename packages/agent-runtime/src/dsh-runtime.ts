@@ -61,7 +61,7 @@ export function runDshToUIMessageStream(input: DshRunInput): Response {
         await client.initialize({
           cwd: input.cwd ?? process.cwd(),
           provider: input.provider ?? process.env.DSH_PROVIDER ?? 'deepseek-official',
-          model: input.modelId ?? process.env.DSH_MODEL ?? 'deepseek-v4-flash',
+          model: input.modelId ?? process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8',
           ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
         });
 

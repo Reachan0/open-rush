@@ -23,7 +23,7 @@ async function getProject(id: string, userId: string) {
 
   const store = new DbMembershipStore(new DrizzleMembershipDb(db));
   const membership = await store.getMembership(userId, id);
-  if (!membership) return null;
+  if (!membership && project.createdBy !== userId) return null;
 
   const projectAgentService = new ProjectAgentService(db);
   const agentStore = new DrizzleAgentConfigStore(db);
@@ -106,7 +106,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
               </Link>
               <Link href={`/chat/new?projectId=${id}`}>
                 <Button size="sm" variant="outline" disabled={!currentAgent}>
-                  Start Task
+                  Start Chat
                 </Button>
               </Link>
             </div>

@@ -156,6 +156,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
         parentRunId: bodyParsed.data.parentRunId,
         modelId: bodyParsed.data.modelId,
         triggerSource: 'user',
+        ...(bodyParsed.data.runtime ? { provider: bodyParsed.data.runtime } : {}),
       },
       idempotency
     );
@@ -184,6 +185,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ age
       runId: created.id,
       prompt: created.prompt,
       agentId: created.agentId,
+      ...(bodyParsed.data.runtime ? { runtime: bodyParsed.data.runtime } : {}),
     });
   }
   // AIGC END
