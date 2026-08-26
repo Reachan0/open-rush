@@ -2,7 +2,7 @@
 
 import type { UIMessage } from 'ai';
 import { ArrowUp, Code, ExternalLink, Maximize2, Paperclip, Square } from 'lucide-react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Conversation, ConversationContent } from '@/components/ai-elements/conversation';
 import { Message, MessageContent } from '@/components/ai-elements/message';
@@ -15,6 +15,13 @@ import { LoadingDots } from '@/components/ui/loading-dots';
 import { useChatAutoSave } from '@/hooks/use-chat-auto-save';
 import { useStreamHeartbeat } from '@/hooks/use-stream-heartbeat';
 import { useStreamRecovery } from '@/hooks/use-stream-recovery';
+import {
+  hasSentInitialPrompt,
+  markInitialPromptSent,
+  shouldSendUrlPrompt,
+  stripQueryParam,
+} from '@/lib/chat-initial-prompt';
+import { shouldApplyLoadedMessages } from '@/lib/chat-loaded-messages';
 import { randomUUID } from '@/lib/random-uuid';
 import {
   type AssistantStreamPart,
@@ -73,6 +80,7 @@ function buildRecoveryMessages(
 
 export default function ChatPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const searchParams = useSearchParams();
 
   const projectId = searchParams.get('projectId') ?? undefined;
@@ -132,6 +140,9 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>('ready');
   const [error, setError] = useState<Error | null>(null);
+  // AIGC START
+  const [historyHydrated, setHistoryHydrated] = useState(false);
+  // AIGC END
 
   const currentRunIdRef = useRef<string | null>(null);
   const lastEventSeqRef = useRef(-1);
@@ -364,6 +375,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (!conversationId || conversationId === loadedConvRef.current) return;
     loadedConvRef.current = conversationId;
+    setHistoryHydrated(false);
 
     // If there's an initialPrompt, the initialPrompt effect will handle
     // sending and stream consumption. Skip auto-attach here to avoid
@@ -373,57 +385,86 @@ export default function ChatPage() {
     let cancelled = false;
 
     void (async () => {
-      const [msgRes, convRes] = await Promise.all([
-        fetch(`/api/chat/${encodeURIComponent(conversationId)}/messages`).then((r) => r.json()),
-        fetch(`/api/conversations/${encodeURIComponent(conversationId)}`).then((r) => r.json()),
-      ]);
-      const loaded = (
-        msgRes.success && Array.isArray(msgRes.data) ? msgRes.data : []
-      ) as UIMessage[];
-      const convAgentName =
-        typeof convRes?.data?.conversation?.agentName === 'string'
-          ? convRes.data.conversation.agentName
-          : '';
-      if (convAgentName) setBoundAgentName(convAgentName);
+      try {
+        const [msgRes, convRes] = await Promise.all([
+          fetch(`/api/chat/${encodeURIComponent(conversationId)}/messages`).then((r) => r.json()),
+          fetch(`/api/conversations/${encodeURIComponent(conversationId)}`).then((r) => r.json()),
+        ]);
+        const loaded = (
+          msgRes.success && Array.isArray(msgRes.data) ? msgRes.data : []
+        ) as UIMessage[];
+        const convAgentName =
+          typeof convRes?.data?.conversation?.agentName === 'string'
+            ? convRes.data.conversation.agentName
+            : '';
+        if (convAgentName) setBoundAgentName(convAgentName);
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      if (!taskId || !projectId) {
-        setMessages(loaded);
-        return;
+        // AIGC START
+        const applyLoaded = shouldApplyLoadedMessages({
+          loadedCount: loaded.length,
+          localCount: messagesRef.current.length,
+          hasInitialPrompt,
+        });
+        // AIGC END
+
+        if (!taskId || !projectId) {
+          if (applyLoaded) setMessages(loaded);
+          return;
+        }
+
+        // When there's an initialPrompt, just load messages — don't attach to a stream.
+        if (hasInitialPrompt && loaded.length === 0) {
+          if (applyLoaded) setMessages(loaded);
+          return;
+        }
+
+        // v1: GET /api/v1/agents/:id (task = v1 Agent). Envelope is `{ data }`.
+        const tr = await fetch(`/api/v1/agents/${encodeURIComponent(taskId)}`).then((r) =>
+          r.json()
+        );
+        // AIGC START
+        const applyLoadedNow = () =>
+          shouldApplyLoadedMessages({
+            loadedCount: loaded.length,
+            localCount: messagesRef.current.length,
+            hasInitialPrompt,
+          });
+        // AIGC END
+        if (cancelled || !tr.data?.activeRunId) {
+          if (applyLoadedNow()) setMessages(loaded);
+          return;
+        }
+
+        const activeRunId: string = tr.data.activeRunId;
+        // v1: GET /api/v1/agents/:agentId/runs/:runId.
+        const runRes = await fetch(
+          `/api/v1/agents/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(activeRunId)}`
+        ).then((r) => r.json());
+        if (cancelled || !runRes.data?.id) {
+          if (applyLoadedNow()) setMessages(loaded);
+          return;
+        }
+
+        const run = runRes.data as { id: string; prompt: string };
+        const raw = sessionStorage.getItem(seqStorageKey(run.id));
+        const parsed = raw === null ? -1 : Number.parseInt(raw, 10);
+        const afterSeq = Number.isNaN(parsed) ? -1 : parsed;
+        // AIGC START
+        if (!applyLoadedNow() && messagesRef.current.length > 0) {
+          return;
+        }
+        // AIGC END
+        const next = buildRecoveryMessages(loaded, run);
+        setMessages(next);
+        lastEventSeqRef.current = afterSeq;
+        void consumeRunStreamRef.current(run.id, afterSeq);
+      } finally {
+        // AIGC START
+        if (!cancelled) setHistoryHydrated(true);
+        // AIGC END
       }
-
-      // When there's an initialPrompt, just load messages — don't attach to a stream.
-      if (hasInitialPrompt && loaded.length === 0) {
-        setMessages(loaded);
-        return;
-      }
-
-      // v1: GET /api/v1/agents/:id (task = v1 Agent). Envelope is `{ data }`.
-      const tr = await fetch(`/api/v1/agents/${encodeURIComponent(taskId)}`).then((r) => r.json());
-      if (cancelled || !tr.data?.activeRunId) {
-        setMessages(loaded);
-        return;
-      }
-
-      const activeRunId: string = tr.data.activeRunId;
-      // v1: GET /api/v1/agents/:agentId/runs/:runId.
-      const runRes = await fetch(
-        `/api/v1/agents/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(activeRunId)}`
-      ).then((r) => r.json());
-      if (cancelled || !runRes.data?.id) {
-        setMessages(loaded);
-        return;
-      }
-
-      const run = runRes.data as { id: string; prompt: string };
-      const raw = sessionStorage.getItem(seqStorageKey(run.id));
-      const parsed = raw === null ? -1 : Number.parseInt(raw, 10);
-      const afterSeq = Number.isNaN(parsed) ? -1 : parsed;
-      const next = buildRecoveryMessages(loaded, run);
-      setMessages(next);
-      lastEventSeqRef.current = afterSeq;
-      void consumeRunStreamRef.current(run.id, afterSeq);
     })();
 
     return () => {
@@ -439,14 +480,45 @@ export default function ChatPage() {
 
   useChatAutoSave({ conversationId, messages, status, model: 'glm-4.7' });
 
-  const didSendInitialRef = useRef(false);
+  // AIGC START
+  const stripPromptFromUrl = useCallback(() => {
+    if (!searchParams.get('prompt')) return;
+    const next = stripQueryParam(searchParams.toString(), 'prompt');
+    router.replace(next ? `/chat/${conversationId}?${next}` : `/chat/${conversationId}`, {
+      scroll: false,
+    });
+  }, [conversationId, router, searchParams]);
+
   useEffect(() => {
-    if (!initialPrompt || status !== 'ready') return;
-    if (didSendInitialRef.current || messages.length > 0) return;
+    if (!conversationId || status !== 'ready') return;
     if (!taskId || !projectId) return;
-    didSendInitialRef.current = true;
+    const alreadySent = hasSentInitialPrompt(conversationId, sessionStorage);
+    if (
+      !shouldSendUrlPrompt({
+        prompt: initialPrompt,
+        alreadySent,
+        messageCount: messages.length,
+        historyHydrated,
+      })
+    ) {
+      if (historyHydrated && initialPrompt) stripPromptFromUrl();
+      return;
+    }
+    markInitialPromptSent(conversationId, sessionStorage);
+    stripPromptFromUrl();
     void startRun(initialPrompt);
-  }, [initialPrompt, status, messages.length, taskId, projectId, startRun]);
+  }, [
+    conversationId,
+    historyHydrated,
+    initialPrompt,
+    messages.length,
+    projectId,
+    startRun,
+    status,
+    stripPromptFromUrl,
+    taskId,
+  ]);
+  // AIGC END
 
   const [input, setInput] = useState('');
   const [activeTab, setActiveTab] = useState<PreviewTab | null>(null);
