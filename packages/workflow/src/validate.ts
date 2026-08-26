@@ -12,8 +12,6 @@ export interface ValidateResult {
   waves: string[][];
 }
 
-const NODE_REF_RE = /\{\{\s*nodes\.([A-Za-z0-9_-]+)/g;
-
 export function collectNodeRefs(value: unknown, into: Set<string> = new Set()): Set<string> {
   if (typeof value === 'string') {
     for (const match of value.matchAll(/\{\{\s*nodes\.([A-Za-z0-9_-]+)/g)) {
