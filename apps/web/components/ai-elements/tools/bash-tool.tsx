@@ -2,12 +2,12 @@
 'use client';
 
 import {
-  isToolRunning,
   Tool,
   ToolContent,
   ToolHeader,
   ToolInput,
   ToolOutput,
+  useToolOpen,
 } from '@/components/ai-elements/tool';
 import type { ToolRendererProps } from '../tool-registry';
 
@@ -18,9 +18,10 @@ import type { ToolRendererProps } from '../tool-registry';
 export function BashTool({ part }: ToolRendererProps) {
   const input = part.input as { command?: string } | undefined;
   const command = input?.command ?? '';
+  const toolOpen = useToolOpen(part.state);
 
   return (
-    <Tool defaultOpen={isToolRunning(part.state)}>
+    <Tool {...toolOpen}>
       <ToolHeader
         type={part.type}
         state={part.state}

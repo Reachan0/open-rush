@@ -2,12 +2,12 @@
 'use client';
 
 import {
-  isToolRunning,
   Tool,
   ToolContent,
   ToolHeader,
   ToolInput,
   ToolOutput,
+  useToolOpen,
 } from '@/components/ai-elements/tool';
 import { prettyToolName } from '@/lib/workflow-dag-model';
 import type { ToolRendererProps } from '../tool-registry';
@@ -16,8 +16,9 @@ import type { ToolRendererProps } from '../tool-registry';
  * Fallback renderer for unknown/custom tools.
  */
 export function GenericTool({ part }: ToolRendererProps) {
+  const toolOpen = useToolOpen(part.state);
   return (
-    <Tool defaultOpen={isToolRunning(part.state)}>
+    <Tool {...toolOpen}>
       <ToolHeader
         type={part.type}
         state={part.state}
