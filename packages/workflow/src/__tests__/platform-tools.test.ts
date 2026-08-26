@@ -36,6 +36,30 @@ describe('createPlatformToolInvoker', () => {
     await expect(tools.invoke('fs.read', { path: '../outside.txt' })).rejects.toThrow(/escapes/);
   });
 
+  it('lists a directory when fs.read is pointed at a folder', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'wf-plat-'));
+    await mkdir(join(root, 'packages', 'workflow'), { recursive: true });
+    await writeFile(join(root, 'packages', 'workflow', 'package.json'), '{}', 'utf8');
+    const tools = createPlatformToolInvoker({ root });
+    const out = await tools.invoke('fs.read', { path: 'packages' });
+    expect(out).toMatchObject({ path: 'packages', type: 'directory' });
+    expect((out as { entries: string[] }).entries).toContain('workflow');
+  });
+
+  it('searches workspace text without using the open web', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'wf-plat-'));
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(
+      join(root, 'src', 'router.ts'),
+      'export function chooseLane() { return "workflow"; }\n',
+      'utf8'
+    );
+    const tools = createPlatformToolInvoker({ root });
+    const out = await tools.invoke('fs.search', { query: 'chooseLane' });
+    expect(out).toMatchObject({ query: 'chooseLane' });
+    expect((out as { path: string }).path).toContain('router.ts');
+  });
+
   it('searches via Keenable /v1/search when an API key is set', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const tools = createPlatformToolInvoker({

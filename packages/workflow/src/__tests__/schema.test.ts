@@ -23,6 +23,21 @@ describe('DSL schema and validation (F1)', () => {
     ).toThrow(WorkflowError);
   });
 
+  it('adds dependsOn when a node interpolates another node without declaring it', () => {
+    const { waves } = validateWorkflowDsl({
+      version: '1',
+      nodes: [
+        { id: 'search', tool: 'echo' },
+        {
+          id: 'read',
+          tool: 'echo',
+          input: { path: '{{nodes.search.output.path}}' },
+        },
+      ],
+    });
+    expect(waves).toEqual([['search'], ['read']]);
+  });
+
   it('detects cycles and duplicate ids', () => {
     expect(() =>
       validateWorkflowDsl({

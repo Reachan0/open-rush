@@ -24,7 +24,7 @@ out/
 .DS_Store
 Thumbs.db
 
-# test
+# test outputs (keep src/__tests__ in git; do not commit coverage dumps)
 coverage/
 test-results/
 
@@ -35,3 +35,11 @@ test-results/
 .pnpm-lock.yaml
 
 .claude/worktrees/
+
+# AIGC START
+# Local-only junk: DSH/preview once wrote a static site into the worker cwd.
+# Do not commit or scp these to the demo host.
+/apps/agent-worker/css/
+/apps/agent-worker/js/
+/apps/agent-worker/index.html
+# AIGC END

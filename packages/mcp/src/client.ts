@@ -95,6 +95,16 @@ export class StdioMcpClient implements IMcpClient {
       env,
     });
 
+    // AIGC START
+    this.process.on('error', (err) => {
+      for (const [, pending] of this.pending) {
+        clearTimeout(pending.timer);
+        pending.reject(err);
+      }
+      this.pending.clear();
+    });
+    // AIGC END
+
     this.process.stdout?.on('data', (data: Buffer) => this.handleData(data.toString()));
     this.process.on('exit', () => this.handleExit());
 

@@ -1,6 +1,6 @@
 // AIGC START
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { LlmComplete } from './generate.js';
 import { createToolInvoker, type RegisteredTool } from './tools.js';
 import { jsonValue, WorkflowError } from './types.js';
@@ -218,6 +218,84 @@ function resolveUnderRoot(root: string, inputPath: string): string {
   return candidate;
 }
 
+const SEARCH_SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  '.next',
+  'coverage',
+  'build',
+  'out',
+  'target',
+  '__pycache__',
+  '.turbo',
+  '.cache',
+]);
+const SEARCH_SKIP_HIT = /workflow-live-page|__tests__|\/tests\/|\.test\.|\.spec\./i;
+const SEARCH_MAX_MATCHES = 40;
+const SEARCH_MAX_FILES = 2_000;
+
+function posixRel(root: string, abs: string): string {
+  return relative(root, abs).split(sep).join('/');
+}
+
+function looksLikeDefinition(query: string, line: string): boolean {
+  const q = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(export\\s+)?(async\\s+)?function\\s+${q}\\b|const\\s+${q}\\s*=`).test(line);
+}
+
+async function searchWorkspaceText(
+  root: string,
+  query: string
+): Promise<{ query: string; path: string; matches: Array<{ path: string; line: string }> }> {
+  const matches: Array<{ path: string; line: string }> = [];
+  const stack = [resolve(root)];
+  let files = 0;
+  while (stack.length > 0 && matches.length < SEARCH_MAX_MATCHES && files < SEARCH_MAX_FILES) {
+    const dir = stack.pop();
+    if (!dir) break;
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (SEARCH_SKIP_DIRS.has(name) || (name.startsWith('.') && name !== '.env.example')) continue;
+      const abs = join(dir, name);
+      let info: Awaited<ReturnType<typeof stat>>;
+      try {
+        info = await stat(abs);
+      } catch {
+        continue;
+      }
+      if (info.isDirectory()) {
+        stack.push(abs);
+        continue;
+      }
+      if (info.size > 1_000_000) continue;
+      files += 1;
+      let raw: string;
+      try {
+        raw = await readFile(abs, 'utf8');
+      } catch {
+        continue;
+      }
+      if (!raw || raw.includes('\0') || !raw.includes(query)) continue;
+      const line = raw.split('\n').find((item) => item.includes(query)) ?? query;
+      matches.push({ path: posixRel(root, abs), line: line.trim().slice(0, 200) });
+      if (matches.length >= SEARCH_MAX_MATCHES) break;
+    }
+  }
+  const preferred =
+    matches.find(
+      (item) => !SEARCH_SKIP_HIT.test(item.path) && looksLikeDefinition(query, item.line)
+    ) ??
+    matches.find((item) => !SEARCH_SKIP_HIT.test(item.path)) ??
+    matches[0];
+  return { query, path: preferred?.path ?? '', matches };
+}
+
 export function createPlatformToolInvoker(options: {
   root: string;
   fetchImpl?: typeof fetch;
@@ -352,16 +430,34 @@ export function createPlatformToolInvoker(options: {
     {
       name: 'fs.read',
       description:
-        'Read a UTF-8 file relative to the workspace root. Input { path }. Output { path, content }. Path cannot escape the workspace.',
+        'Read a UTF-8 file or list a directory relative to the workspace root. Input { path }. File output { path, content }. Directory output { path, type: "directory", entries }. Path cannot escape the workspace.',
       execute: async (args) => {
         const pathText = String(args.path ?? '');
         if (!pathText.trim()) {
           throw new WorkflowError('node_failed', 'path is required');
         }
         const abs = resolveUnderRoot(options.root, pathText);
+        const info = await stat(abs);
+        if (info.isDirectory()) {
+          const names = await readdir(abs);
+          const entries = names.slice(0, 200);
+          return jsonValue({ path: pathText, type: 'directory', entries });
+        }
         const raw = await readFile(abs, 'utf8');
         const content = raw.length > MAX_CHARS ? `${raw.slice(0, MAX_CHARS)}\n…[truncated]` : raw;
         return jsonValue({ path: pathText, content });
+      },
+    },
+    {
+      name: 'fs.search',
+      description:
+        'Search workspace text without using the open web. Input { query }. Output { query, path, matches }. path is the first useful hit; then fs.read that path. Skips node_modules, .git, dist.',
+      execute: async (args) => {
+        const query = String(args.query ?? args.pattern ?? args.text ?? '').trim();
+        if (!query) {
+          throw new WorkflowError('node_failed', 'query is required');
+        }
+        return jsonValue(await searchWorkspaceText(options.root, query));
       },
     },
     {

@@ -60,6 +60,33 @@ describe('engine expression coverage (B5)', () => {
     expect(startA?.payload).toMatchObject({ nodeId: 'a', tool: 'echo', input: { value: 'one' } });
   });
 
+  it('inherits a file path from the search node when read_file omits it', async () => {
+    const tools = createToolInvoker([
+      {
+        name: 'coding-tools__search_text',
+        description: 'search',
+        execute: () => ({ query: 'chooseLane', path: 'src/router.ts', matches: [] }),
+      },
+      {
+        name: 'coding-tools__read_file',
+        description: 'read',
+        execute: (args) => ({ path: String(args.path), content: 'ok' }),
+      },
+    ]);
+    const result = await executeWorkflow(
+      {
+        version: '1',
+        nodes: [
+          { id: 'search', tool: 'coding-tools__search_text', input: { query: 'chooseLane' } },
+          { id: 'read', tool: 'coding-tools__read_file', dependsOn: ['search'] },
+        ],
+      },
+      { tools }
+    );
+    expect(result.nodes.map((n) => n.status)).toEqual(['completed', 'completed']);
+    expect(result.output).toMatchObject({ path: 'src/router.ts', content: 'ok' });
+  });
+
   it('runs independent nodes in one wave (parallel)', async () => {
     let inflight = 0;
     let maxInflight = 0;

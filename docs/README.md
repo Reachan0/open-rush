@@ -15,6 +15,8 @@ pnpm dev
 
 See [AGENTS.md](../AGENTS.md) for the full architecture guide.
 
+演示机怎么起、端口、MCP、以及哪些文件不要 scp：见 [remote-demo.md](./remote-demo.md)。
+
 ### Three-Layer Architecture
 
 ```

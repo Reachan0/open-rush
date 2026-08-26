@@ -27,6 +27,7 @@ describe('codingToolsStdioAttempts', () => {
       'safe',
     ]);
     expect(npx?.env.CODING_TOOLS_MCP_TELEMETRY).toBe('off');
+    expect(attempts.some((item) => item.label === 'uvx')).toBe(true);
   });
 });
 
@@ -135,6 +136,19 @@ describe('wrapCodingInvoker', () => {
     const wrapped = wrapCodingInvoker(inner);
     await wrapped.invoke('coding-tools__read_file', { path: dump });
     expect(seen).toEqual(['packages/workflow/src/router.ts']);
+  });
+
+  it('does not call MCP read_file when path is missing', async () => {
+    const inner = {
+      listTools: () => [],
+      async invoke() {
+        throw new Error('should not call MCP');
+      },
+    };
+    const wrapped = wrapCodingInvoker(inner);
+    await expect(wrapped.invoke('coding-tools__read_file', {})).rejects.toThrow(
+      /needs a relative file path/
+    );
   });
 });
 

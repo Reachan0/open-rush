@@ -1265,7 +1265,7 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
         setRuntime("快车道失败", "fail");
         setStats("Failed", graph ? graph.nodes.length : 0, countDone());
         $("outputMeta").textContent = "未完成 · " + reason;
-        setOutput("快车道失败：" + reason + (error ? "\\n" + error : "") + "\\n未再降级到出游 mock。");
+        setOutput("快车道失败：" + reason + (error ? "\\n" + error : "") + "\\n本页不自动降级到慢车道。");
         logLine("失败  " + reason + (error ? " · " + error : ""), true);
         followNode("__end__", 0);
         draw();

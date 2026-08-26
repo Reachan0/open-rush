@@ -12,6 +12,27 @@ export interface ValidateResult {
   waves: string[][];
 }
 
+const NODE_REF_RE = /\{\{\s*nodes\.([A-Za-z0-9_-]+)/g;
+
+export function collectNodeRefs(value: unknown, into: Set<string> = new Set()): Set<string> {
+  if (typeof value === 'string') {
+    for (const match of value.matchAll(/\{\{\s*nodes\.([A-Za-z0-9_-]+)/g)) {
+      into.add(match[1]);
+    }
+    return into;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectNodeRefs(item, into);
+    return into;
+  }
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      collectNodeRefs(item, into);
+    }
+  }
+  return into;
+}
+
 export function detectCycle(dsl: WorkflowDsl): string[] | null {
   const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
   const visiting = new Set<string>();
@@ -78,6 +99,19 @@ export function validateWorkflowDsl(input: unknown, options: ValidateOptions = {
     const dup = ids.find((id, i) => ids.indexOf(id) !== i);
     throw new WorkflowError('duplicate_id', `duplicate node id: ${dup}`);
   }
+
+  dsl = {
+    ...dsl,
+    nodes: dsl.nodes.map((node) => {
+      const deps = new Set(node.dependsOn ?? []);
+      collectNodeRefs(node.input, deps);
+      collectNodeRefs(node.if, deps);
+      collectNodeRefs(node.foreach, deps);
+      deps.delete(node.id);
+      const dependsOn = [...deps];
+      return dependsOn.length > 0 ? { ...node, dependsOn } : { ...node, dependsOn: undefined };
+    }),
+  };
 
   for (const node of dsl.nodes) {
     for (const dep of node.dependsOn ?? []) {

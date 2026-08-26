@@ -131,6 +131,27 @@ describe('generateWorkflowDsl', () => {
     expect(generated.prompt).toMatch(/search_text with \{ query/);
   });
 
+  it('keeps workspace 搜一下 on fs.search when coding-tools is absent', async () => {
+    const generated = await generateWorkflowDsl({
+      intent: '在工作区里搜一下 chooseLane 这个函数在哪定义，读那个文件，用口语讲它怎么分流',
+      tools: [
+        { name: 'web.search', description: 'web' },
+        { name: 'fs.read', description: 'read' },
+        { name: 'fs.search', description: 'search workspace' },
+        { name: 'text.compose', description: 'write' },
+      ],
+      complete: async () =>
+        JSON.stringify({
+          version: '1',
+          name: 'symbol',
+          nodes: [{ id: 'find', tool: 'fs.search' }],
+        }),
+    });
+    expect(generated.prompt).toMatch(/fs\.search/);
+    expect(generated.prompt).toMatch(/Do NOT use web.search/);
+    expect(generated.prompt).not.toMatch(/live coding-tools MCP/);
+  });
+
   it('keeps workspace 搜一下 on coding-tools search_text, not web.search', async () => {
     const generated = await generateWorkflowDsl({
       intent: '在工作区里搜一下 chooseLane 这个函数在哪定义，读那个文件，用口语讲它怎么分流',

@@ -252,6 +252,21 @@ describe('HttpMcpClient', () => {
 });
 
 // ---------------------------------------------------------------------------
+// StdioMcpClient
+// ---------------------------------------------------------------------------
+
+describe('StdioMcpClient', () => {
+  // AIGC START
+  it('rejects connect when the stdio command is missing instead of crashing the process', async () => {
+    const client = new StdioMcpClient(
+      makeConfig({ command: 'openrush-missing-mcp-bin', args: ['--stdio'] })
+    );
+    await expect(client.connect()).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  // AIGC END
+});
+
+// ---------------------------------------------------------------------------
 // createMcpClient (factory)
 // ---------------------------------------------------------------------------
 

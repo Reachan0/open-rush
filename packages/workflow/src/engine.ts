@@ -34,6 +34,54 @@ function asArgs(value: JsonValue | undefined): Record<string, unknown> {
   return { value };
 }
 
+function looksLikeFilePath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value !== '[object Object]' &&
+    !value.includes('\n')
+  );
+}
+
+function pathFromNodeOutput(output: unknown): string | undefined {
+  if (looksLikeFilePath(output)) return output.trim();
+  if (!output || typeof output !== 'object') return undefined;
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      const hit = pathFromNodeOutput(item);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  const rec = output as Record<string, unknown>;
+  for (const key of ['path', 'file', 'filepath', 'filename']) {
+    if (looksLikeFilePath(rec[key])) return String(rec[key]).trim();
+  }
+  for (const key of ['matches', 'results', 'hits']) {
+    if (Array.isArray(rec[key])) {
+      const hit = pathFromNodeOutput(rec[key]);
+      if (hit) return hit;
+    }
+  }
+  return undefined;
+}
+
+function withInheritedReadPath(
+  toolName: string,
+  args: Record<string, unknown>,
+  node: WorkflowNode,
+  ctx: InterpContext
+): Record<string, unknown> {
+  if (!/(^|__)read_file$|^fs\.read$/i.test(toolName)) return args;
+  const current = args.path ?? args.file ?? args.filepath ?? args.filename ?? args.target;
+  if (looksLikeFilePath(current) || (current && typeof current === 'object')) return args;
+  for (const dep of node.dependsOn ?? []) {
+    const hit = pathFromNodeOutput(ctx.nodes[dep]?.output);
+    if (hit) return { ...args, path: hit };
+  }
+  return args;
+}
+
 function normalizeToolName(name: string): string {
   return name.toLowerCase();
 }
@@ -176,7 +224,12 @@ export async function executeWorkflow(
         const collected = await Promise.all(
           listRaw.map(async (item, index) => {
             const itemCtx: InterpContext = { ...parentCtx, item: item as JsonValue };
-            const args = asArgs(interpolateValue(node.input as JsonValue | undefined, itemCtx));
+            const args = withInheritedReadPath(
+              toolName,
+              asArgs(interpolateValue(node.input as JsonValue | undefined, itemCtx)),
+              node,
+              itemCtx
+            );
             await emitSafe(options.sink, 'workflow-foreach-item', {
               nodeId: node.id,
               index,
@@ -248,7 +301,12 @@ export async function executeWorkflow(
             node.id
           );
         }
-        const args = asArgs(interpolateValue(node.input as JsonValue | undefined, ctxOf()));
+        const args = withInheritedReadPath(
+          toolName,
+          asArgs(interpolateValue(node.input as JsonValue | undefined, ctxOf())),
+          node,
+          ctxOf()
+        );
         const output = await invokeWithTimeout(
           options.tools,
           toolName,

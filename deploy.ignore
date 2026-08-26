@@ -1,0 +1,35 @@
+# AIGC START
+# rsync/scp exclude list for the Oracle demo host.
+# Tests stay in GitHub; the demo machine does not need them.
+
+.git/
+.github/
+.husky/
+.turbo/
+.workflow/
+.claude/
+.DS_Store
+
+node_modules/
+dist/
+.next/
+out/
+coverage/
+test-results/
+*.tsbuildinfo
+*.log
+
+.env
+.env.local
+.env.*.local
+
+**/__tests__/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+
+apps/agent-worker/css/
+apps/agent-worker/js/
+apps/agent-worker/index.html
+# AIGC END

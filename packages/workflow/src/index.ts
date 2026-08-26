@@ -76,6 +76,6 @@ export type {
   WorkflowRunResult,
 } from './types.js';
 export { DEFAULT_GUARDS, WORKFLOW_RUN_TOOL, WorkflowError } from './types.js';
-export { detectCycle, topoWaves, validateWorkflowDsl } from './validate.js';
+export { collectNodeRefs, detectCycle, topoWaves, validateWorkflowDsl } from './validate.js';
 export { type WorkflowRunInput, workflowRun } from './workflow-run.js';
 // AIGC END

@@ -1,7 +1,7 @@
 // AIGC START
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { createMcpClient, type IMcpClient } from '@open-rush/mcp';
+import { createMcpClient } from '@open-rush/mcp';
 import { createMcpToolInvoker, type ToolInvoker } from '@open-rush/workflow';
 
 export const CODING_TOOLS_PREFIX = 'coding-tools';
@@ -36,6 +36,15 @@ export function codingToolsStdioAttempts(workspace: string): Array<{
     { label: 'npx', command: 'npx', args: ['-y', 'coding-tools-mcp', ...flags], env },
     { label: 'uvx', command: 'uvx', args: ['coding-tools-mcp', ...flags], env },
   ];
+}
+
+function commandOnPath(bin: string): boolean {
+  const pathEnv = process.env.PATH ?? '';
+  const delimiter = process.platform === 'win32' ? ';' : ':';
+  const suffixes = process.platform === 'win32' ? ['', '.cmd', '.exe'] : [''];
+  return pathEnv
+    .split(delimiter)
+    .some((dir) => suffixes.some((suffix) => existsSync(join(dir, `${bin}${suffix}`))));
 }
 
 export function resolveWorkflowWorkspace(start: string): string {
@@ -231,6 +240,12 @@ export function wrapCodingInvoker(tools: ToolInvoker): ToolInvoker {
       const rawPath = next.path ?? next.file ?? next.filepath ?? next.filename ?? next.target;
       const extracted = extractCodingHitPath(rawPath, String(next.query ?? ''));
       if (extracted) next.path = extracted;
+      const pathText = typeof next.path === 'string' ? next.path.trim() : '';
+      if (!pathText) {
+        throw new Error(
+          'read_file needs a relative file path. Search first and pass {{nodes.<search>.output.path}}.'
+        );
+      }
       const candidates = codingReadPathCandidates(next.path ?? rawPath);
       if (candidates.length === 0) {
         return normalizeCodingReadResult(
@@ -258,10 +273,8 @@ export function wrapCodingInvoker(tools: ToolInvoker): ToolInvoker {
 export async function connectCodingToolsInvoker(
   workspace: string
 ): Promise<{ tools: ToolInvoker; disconnect: () => Promise<void> }> {
-  const attempts: Array<{ label: string; client: IMcpClient }> = codingToolsStdioAttempts(
-    workspace
-  ).map((attempt) => ({
-    label: attempt.label,
+  const attempts = codingToolsStdioAttempts(workspace).map((attempt) => ({
+    ...attempt,
     client: createMcpClient(
       {
         id: CODING_TOOLS_PREFIX,
@@ -278,6 +291,10 @@ export async function connectCodingToolsInvoker(
   }));
   const errors: string[] = [];
   for (const attempt of attempts) {
+    if (!commandOnPath(attempt.command)) {
+      errors.push(`${attempt.label}: command not found`);
+      continue;
+    }
     try {
       await attempt.client.connect();
       const listed = await attempt.client.listTools();
