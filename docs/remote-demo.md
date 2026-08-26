@@ -1,9 +1,16 @@
 # 远程演示（Oracle）
 
-实习演示机备忘，不是官方 quickstart。源码在本仓库；DeepSeek Harness 在机器上同级目录 `../deepseek-harness`，不要改它。
+实习演示机备忘，不是官方 quickstart。
 
 本机：`ssh oracle`（`145.241.168.101`，用户 `ubuntu`）。  
-远程代码：`/home/ubuntu/projects/open-rush`。
+远程目录：
+
+| 仓库 | 路径 | 说明 |
+|------|------|------|
+| OpenRush（本仓库） | `/home/ubuntu/projects/open-rush` | Web / 队列 / agent-worker / 快车道 |
+| DeepSeek Harness | `/home/ubuntu/projects/deepseek-harness` | 慢车道真正跑模型和工具的引擎，**不要改源码** |
+
+DSH **没有自己的 8787/3000 端口**。`AGENT_RUNTIME=dsh` 时，agent-worker 按对话 spawn 子进程，用 JSON-RPC 说话。健康检查里 `"runtime":"dsh"` 就说明接到了。
 
 ```mermaid
 flowchart LR
@@ -11,7 +18,9 @@ flowchart LR
   you --> live["快车道实时图 :8787/workflow-live"]
   web --> cw[control-worker 无 HTTP 口]
   cw --> aw["agent-worker :8787"]
-  aw --> dsh[deepseek-harness]
+  aw -->|"步骤清楚"| wf[快车道引擎]
+  aw -->|"写代码 / 含糊"| spawn[spawn DSH 子进程]
+  spawn --> dsh["deepseek-harness 源码 + 构建产物"]
   aw --> mcp[coding-tools MCP]
 ```
 
@@ -61,6 +70,50 @@ WORKFLOW_WORKSPACE=/home/ubuntu/projects/open-rush
 ```
 
 不要设 `CODING_TOOLS_MCP=0`。没高德 Key 就走出游假数据，这是预期。
+
+---
+
+## DeepSeek Harness 怎么部署
+
+慢车道（聊天里写代码、问清楚、快车道失败回退）都靠它。演示机上已经有一份，新机器按下面做一遍。
+
+1. **克隆到 OpenRush 的同级目录**（worker 默认找 `../deepseek-harness`）：
+
+```bash
+cd /home/ubuntu/projects
+git clone https://github.com/deepseek-ai/deepseek-harness.git
+cd deepseek-harness
+pnpm install
+pnpm run build
+```
+
+构建成功后应能看到 `packages/examples/jsonrpc-demo/lib/packaged-bin.js`（或 `lib/bin.js`）。  
+OpenRush 真正拉起的入口是本仓库的 `apps/agent-worker/dsh/launch.mjs`，组合配置是同目录 `cordis.yml`。`launch.mjs` 要求环境变量 `DSH_ROOT` 指向这份 checkout，插件才解析得到。
+
+2. **只改 OpenRush 的 `apps/agent-worker/.env.local`，不要改 DSH 源码：**
+
+```
+AGENT_RUNTIME=dsh
+DSH_ROOT=/home/ubuntu/projects/deepseek-harness
+DSH_MODEL=DeepSeek-V4-Flash-INT8
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://你的网关/aigw/v1
+```
+
+网关若是自签证书才需要 `NODE_TLS_REJECT_UNAUTHORIZED=0`。  
+`DSH_ROOT` 可以省略——只要目录就在 `open-rush` 隔壁并已 build。演示机上写死了绝对路径，避免 cwd 不对时找不到。
+
+3. **不要单独 `systemctl start dsh`。** 起 agent-worker 即可。一场对话复用同一个 DSH 进程，闲置大约半小时再回收。`GET /health` 应带 `"runtime":"dsh"`。
+
+DSH 升级（一般不用，升级可能和 `cordis.yml` 对不上）：
+
+```bash
+cd /home/ubuntu/projects/deepseek-harness
+git pull
+pnpm install
+pnpm run build
+# 然后重启 agent-worker，让新 spawn 用到新构建
+```
 
 ---
 
@@ -115,6 +168,7 @@ curl -sS http://127.0.0.1:8787/workflow-catalog
 
 ## 常见坑
 
+- **健康检查不是 dsh**：`"runtime":"dsh"` 只说明 worker 会去 spawn；真连上要看聊天能否出思考/工具，或 worker 日志里有没有 DSH 子进程。缺 `DSH_ROOT` 或没 `pnpm run build` 时，慢车道会直接报 `DeepSeek Harness runtime is not ready`。
 - **整页连不上**：多半是 rebuild 那几秒 8787 空了，等 health 200 再刷。
 - **搜 chooseLane 却走网页搜**：catalog 里没有 coding-tools。查 PATH 有没有 `uvx`，有没有误开 `CODING_TOOLS_MCP=0`。
 - **`arguments.path is required`**：规划器读文件时没等搜索结果。新代码会补依赖；仍失败就看图里 `read_file` 是否和 `search_text` 同一波。
