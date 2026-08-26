@@ -369,6 +369,17 @@ describe('agent-worker server', () => {
       expect(workflowRun).not.toHaveBeenCalled();
     });
 
+    it('routes the current user turn even when history contains search hints', async () => {
+      mockStreamTextSuccess();
+      const res = await postPrompt({
+        prompt:
+          '此前对话：\n\nUser: 帮我搜一下杭州周末去处\n\nAssistant: 可以去西湖\n\nUser: 帮我看看这段 TypeScript 报错',
+      });
+      expect(res.status).toBe(200);
+      expect(workflowRun).not.toHaveBeenCalled();
+      expect(streamText).toHaveBeenCalled();
+    });
+
     it('routes gather-and-compose prompts onto the workflow lane', async () => {
       const res = await postPrompt({
         prompt: '总结 https://example.com/a 和 https://example.com/b 写成一篇摘要',

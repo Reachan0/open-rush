@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DshEventMapper } from './dsh-event-mapper.js';
 import { DshJsonRpcClient } from './dsh-jsonrpc-client.js';
 import { buildDshChildEnv, resolveDshLaunch } from './dsh-launch.js';
+import { type DshPooledClient, DshSessionPool } from './dsh-session-pool.js';
 import type { DshRunInput, UIMessageChunk } from './dsh-types.js';
 
 function encodeSse(chunk: UIMessageChunk | '[DONE]'): Uint8Array {
@@ -27,44 +28,47 @@ function isInboxReceipt(event: unknown, messageId: string): boolean {
   );
 }
 
+function createDshClient(input: DshRunInput): DshPooledClient {
+  const launch = resolveDshLaunch();
+  const sessionRoot = mkdtempSync(join(tmpdir(), `openrush-dsh-${input.sessionId}-`));
+  return new DshJsonRpcClient(
+    launch,
+    buildDshChildEnv({
+      env: input.env,
+      cwd: input.cwd,
+      systemPrompt: input.systemPrompt,
+      sessionRoot,
+      repoRoot: launch.repoRoot,
+    })
+  );
+}
+
+const sharedPool = new DshSessionPool(createDshClient);
+
 /**
- * Drive a DeepSeek Harness JSON-RPC runtime subprocess and expose the turn as
- * an AI SDK UIMessageChunk SSE response (SSE① for control-worker).
+ * Drive a DeepSeek Harness JSON-RPC runtime and expose the turn as an AI SDK
+ * UIMessageChunk SSE response. The DSH process is kept alive per sessionId so
+ * later turns resume the same engine session instead of starting a new one.
  */
-export function runDshToUIMessageStream(input: DshRunInput): Response {
+export function runDshToUIMessageStream(
+  input: DshRunInput,
+  options?: { pool?: DshSessionPool }
+): Response {
+  const pool = options?.pool ?? sharedPool;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const mapper = new DshEventMapper();
-      let client: DshJsonRpcClient | undefined;
+      let client: DshPooledClient | undefined;
       const enqueue = (chunks: UIMessageChunk[]) => {
         for (const chunk of chunks) controller.enqueue(encodeSse(chunk));
       };
       const onAbort = () => {
-        void client?.close();
+        void pool.drop(input.sessionId);
       };
       input.abortSignal?.addEventListener('abort', onAbort, { once: true });
 
       try {
-        const launch = resolveDshLaunch();
-        const sessionRoot = mkdtempSync(join(tmpdir(), `openrush-dsh-${input.sessionId}-`));
-        client = new DshJsonRpcClient(
-          launch,
-          buildDshChildEnv({
-            env: input.env,
-            cwd: input.cwd,
-            systemPrompt: input.systemPrompt,
-            sessionRoot,
-            repoRoot: launch.repoRoot,
-          })
-        );
-        client.start();
-        await client.initialize({
-          cwd: input.cwd ?? process.cwd(),
-          provider: input.provider ?? process.env.DSH_PROVIDER ?? 'deepseek-official',
-          model: input.modelId ?? process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8',
-          ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
-        });
-
+        client = await pool.acquire(input);
         const messageId = await client.prompt(input.sessionId, input.prompt);
         let received = false;
         while (!input.abortSignal?.aborted) {
@@ -92,6 +96,7 @@ export function runDshToUIMessageStream(input: DshRunInput): Response {
           enqueue(mapper.error('aborted'));
         } else {
           enqueue(mapper.flush());
+          pool.release(input.sessionId);
         }
         controller.enqueue(encodeSse('[DONE]'));
         controller.close();
@@ -100,9 +105,10 @@ export function runDshToUIMessageStream(input: DshRunInput): Response {
         enqueue(mapper.error(message));
         controller.enqueue(encodeSse('[DONE]'));
         controller.close();
+        if (!client?.isAlive()) await pool.drop(input.sessionId);
       } finally {
         input.abortSignal?.removeEventListener('abort', onAbort);
-        await client?.close();
+        if (input.abortSignal?.aborted) await pool.drop(input.sessionId);
       }
     },
   });

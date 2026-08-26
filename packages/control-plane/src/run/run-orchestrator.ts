@@ -131,7 +131,9 @@ export class RunOrchestrator {
         : prompt;
 
       const { response } = await agentBridge.sendPrompt(fullPrompt, {
-        sessionId: runId,
+        // AIGC START
+        sessionId: run?.taskId ?? runId,
+        // AIGC END
         env: agentContext?.env,
         allowedTools: agentContext?.agentConfig.allowedTools,
         maxTurns: agentContext?.agentConfig.maxSteps,

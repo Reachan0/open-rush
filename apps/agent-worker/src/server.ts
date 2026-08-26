@@ -18,6 +18,7 @@ import {
   type LlmComplete,
   llmCompleteFromEnv,
   mergeToolInvokers,
+  routingIntent,
   type ToolInvoker,
   WEEKEND_TRIP_INTENT,
   weekendTripDsl,
@@ -212,17 +213,18 @@ app.post('/prompt', async (c) => {
     const workspaceCwd = projectPath ?? process.cwd();
     const complete = llmCompleteFromEnv();
 
-    if (chooseLane(userPrompt) === 'workflow') {
+    const laneIntent = routingIntent(userPrompt);
+    if (chooseLane(laneIntent) === 'workflow') {
       try {
         const tools = await workflowCatalog({
           root: workspaceCwd,
           complete,
-          userIntent: userPrompt,
+          userIntent: laneIntent,
         });
         return withStreamCleanup(
           workflowRunToSseResponse((sink) =>
             workflowRun({
-              intent: userPrompt,
+              intent: laneIntent,
               tools,
               complete,
               allowHeuristic: !complete,

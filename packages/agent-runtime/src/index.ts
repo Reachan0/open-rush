@@ -21,6 +21,14 @@ export {
   resolveDshLaunch,
 } from './dsh-launch.js';
 export { runDshToUIMessageStream } from './dsh-runtime.js';
+// AIGC START
+export {
+  type DshClientFactory,
+  type DshPooledClient,
+  DshSessionPool,
+  type DshSessionPoolOptions,
+} from './dsh-session-pool.js';
+// AIGC END
 export type {
   AgentRuntimeKind,
   DshInitializeParams,

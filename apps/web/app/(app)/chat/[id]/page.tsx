@@ -136,6 +136,10 @@ export default function ChatPage() {
   const currentRunIdRef = useRef<string | null>(null);
   const lastEventSeqRef = useRef(-1);
   const streamAbortRef = useRef<AbortController | null>(null);
+  // AIGC START
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  // AIGC END
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -273,6 +277,16 @@ export default function ChatPage() {
       setStatus('submitted');
 
       const userMsgId = randomUUID();
+      // AIGC START
+      const priorMessages = messagesRef.current.filter((m) => m.id !== 'pending-asst');
+      if (conversationId && priorMessages.length > 0) {
+        await fetch(`/api/chat/${encodeURIComponent(conversationId)}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: priorMessages, model: 'glm-4.7' }),
+        }).catch(() => {});
+      }
+      // AIGC END
       setMessages((prev) => [
         ...prev,
         {
@@ -330,7 +344,7 @@ export default function ChatPage() {
         setStatus('error');
       }
     },
-    [projectId, taskId, clearError, runtime]
+    [projectId, taskId, conversationId, clearError, runtime]
   );
 
   const stopRun = useCallback(async () => {

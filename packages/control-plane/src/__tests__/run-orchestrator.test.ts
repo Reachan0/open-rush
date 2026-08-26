@@ -287,6 +287,35 @@ describe('RunOrchestrator', () => {
       expect(body.sessionId).toBe('run-2');
     });
 
+    it('reuses the task id as the engine session across runs', async () => {
+      const run = makeQueuedRun('run-3');
+      run.taskId = 'task-chat-1';
+      runDb.seed(run);
+      fetchMock.mockResolvedValueOnce(mockSSEResponse([{ type: 'done', reason: 'end_turn' }]));
+
+      await orchestrator.execute('run-3', '我叫什么？', 'agent-1');
+
+      const [, init] = fetchMock.mock.calls[0];
+      const body = JSON.parse(init.body);
+      expect(body.sessionId).toBe('task-chat-1');
+      expect(body.prompt).toBe('我叫什么？');
+    });
+
+    it('does not paste conversation history into the engine prompt', async () => {
+      const run = makeQueuedRun('run-history');
+      run.taskId = 'task-history';
+      runDb.seed(run);
+      fetchMock.mockResolvedValueOnce(mockSSEResponse([{ type: 'done', reason: 'end_turn' }]));
+
+      await orchestrator.execute('run-history', '我叫什么？', 'agent-1');
+
+      const [, init] = fetchMock.mock.calls[0];
+      const body = JSON.parse(init.body);
+      expect(body.sessionId).toBe('task-history');
+      expect(body.prompt).toBe('我叫什么？');
+      expect(body.prompt).not.toContain('此前对话');
+    });
+
     it('forwards explicit runtime to the agent worker', async () => {
       const run = makeQueuedRun('run-runtime');
       run.provider = 'dsh';

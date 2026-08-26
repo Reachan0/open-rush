@@ -26,6 +26,11 @@ export class DshJsonRpcClient {
     private readonly env: NodeJS.ProcessEnv
   ) {}
 
+  isAlive(): boolean {
+    const child = this.child;
+    return child != null && !this.closed && !this.failure && child.exitCode === null;
+  }
+
   start(): void {
     if (this.child || this.closed) return;
     const child = spawn(this.launch.command, this.launch.args, {

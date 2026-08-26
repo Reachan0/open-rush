@@ -4,6 +4,13 @@ export {
   completeWithChatCompletions,
   llmCompleteFromEnv,
 } from './complete-llm.js';
+export {
+  buildEnginePrompt,
+  CONVERSATION_HISTORY_HEADER,
+  formatConversationHistory,
+  type HistoryTurn,
+  routingIntent,
+} from './conversation-history.js';
 export { type ExecuteOptions, type ExecuteResult, executeWorkflow } from './engine.js';
 export {
   accumulateUsage,

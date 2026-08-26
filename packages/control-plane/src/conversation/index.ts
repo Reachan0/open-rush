@@ -1,4 +1,12 @@
 export {
+  buildEnginePrompt,
+  CONVERSATION_HISTORY_HEADER,
+  collectTurnsFromPriorRuns,
+  createTaskHistoryLoader,
+  formatConversationHistory,
+  type HistoryTurn,
+} from './conversation-history.js';
+export {
   type Conversation,
   type ConversationDb,
   ConversationService,
