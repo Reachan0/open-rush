@@ -15,6 +15,7 @@ import { LoadingDots } from '@/components/ui/loading-dots';
 import { useChatAutoSave } from '@/hooks/use-chat-auto-save';
 import { useStreamHeartbeat } from '@/hooks/use-stream-heartbeat';
 import { useStreamRecovery } from '@/hooks/use-stream-recovery';
+import { randomUUID } from '@/lib/random-uuid';
 import {
   type AssistantStreamPart,
   applyAssistantParts,
@@ -271,7 +272,7 @@ export default function ChatPage() {
       clearError();
       setStatus('submitted');
 
-      const userMsgId = crypto.randomUUID();
+      const userMsgId = randomUUID();
       setMessages((prev) => [
         ...prev,
         {
@@ -297,7 +298,7 @@ export default function ChatPage() {
             'Content-Type': 'application/json',
             // Idempotency-Key: give the same send a 24h dedupe window so accidental
             // double-click doesn't spawn duplicate runs. See specs §幂等性.
-            'Idempotency-Key': crypto.randomUUID(),
+            'Idempotency-Key': randomUUID(),
           },
           body: JSON.stringify({ input: text, runtime }),
         });
