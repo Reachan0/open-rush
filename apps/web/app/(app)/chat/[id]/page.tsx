@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Conversation, ConversationContent } from '@/components/ai-elements/conversation';
 import { Message, MessageContent } from '@/components/ai-elements/message';
 import { PartRenderer } from '@/components/ai-elements/part-renderer';
+import { ReliabilityPanel } from '@/components/chat/reliability/reliability-panel';
 import { WorkflowDagProvider } from '@/components/chat/workflow-dag-context';
 import { WorkflowPanel } from '@/components/chat/workflow-panel';
 import { WorkspaceFilesPanel } from '@/components/chat/workspace-files-panel';
@@ -33,7 +34,7 @@ import {
 import { cn } from '@/lib/utils';
 import { findLatestWorkflowPlan } from '@/lib/workflow-dag-model';
 
-type PreviewTab = 'preview' | 'code' | 'files' | 'workflow';
+type PreviewTab = 'preview' | 'code' | 'files' | 'workflow' | 'reliability';
 
 type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
 
@@ -602,9 +603,11 @@ export default function ChatPage() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex items-center bg-muted rounded-lg p-[2px] mr-2">
-              {(['preview', 'code', 'files', 'workflow'] as const).map((tab) => (
+          <div className="flex items-center gap-1.5 min-w-0">
+            {/* AIGC START */}
+            <div className="flex items-center bg-muted rounded-lg p-[2px] mr-2 max-w-full overflow-x-auto">
+              {/* AIGC END */}
+              {(['preview', 'code', 'files', 'workflow', 'reliability'] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -616,7 +619,11 @@ export default function ChatPage() {
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  {tab === 'workflow' ? 'Workflow' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  {tab === 'workflow'
+                    ? 'Workflow'
+                    : tab === 'reliability'
+                      ? '可靠性'
+                      : tab.charAt(0).toUpperCase() + tab.slice(1)}
                 </button>
               ))}
             </div>
@@ -638,7 +645,14 @@ export default function ChatPage() {
         </div>
 
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          <div className={cn('flex flex-col min-w-[380px]', activeTab ? 'w-[42%]' : 'flex-1')}>
+          {/* AIGC START */}
+          <div
+            className={cn(
+              'flex flex-col min-w-0',
+              activeTab ? 'w-[42%] max-[480px]:hidden' : 'flex-1'
+            )}
+          >
+            {/* AIGC END */}
             <div className="flex-1 overflow-y-auto px-5 py-5">
               {(!taskId || !projectId) && (
                 <div className="mx-auto max-w-2xl mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
@@ -716,6 +730,7 @@ export default function ChatPage() {
                   {isLoading ? (
                     <button
                       type="button"
+                      aria-label="取消"
                       onClick={() => void stopRun()}
                       className="size-8 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center hover:bg-destructive/20 transition cursor-pointer shrink-0"
                     >
@@ -777,6 +792,7 @@ export default function ChatPage() {
                   // AIGC END
                 )}
                 {activeTab === 'workflow' && <WorkflowPanel messages={messages} />}
+                {activeTab === 'reliability' && <ReliabilityPanel messages={messages} />}
               </div>
             </>
           )}

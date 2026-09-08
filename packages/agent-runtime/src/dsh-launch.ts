@@ -72,11 +72,16 @@ export function resolveDshLaunch(
         resolveExisting(join(repoRoot, 'packages/examples/jsonrpc-demo/lib/bin.js')))
       : undefined);
 
+  const demoCordis = openRushRoot
+    ? resolveExisting(join(openRushRoot, 'apps/agent-worker/dsh/cordis-ao04.yml'))
+    : undefined;
+  const defaultCordis = openRushRoot
+    ? resolveExisting(join(openRushRoot, 'apps/agent-worker/dsh/cordis.yml'))
+    : undefined;
   const cordisPath =
     resolveExisting(env.DSH_CORDIS_CONFIG) ??
-    (openRushRoot
-      ? resolveExisting(join(openRushRoot, 'apps/agent-worker/dsh/cordis.yml'))
-      : undefined) ??
+    (env.AO04_DEMO === '1' ? demoCordis : undefined) ??
+    defaultCordis ??
     (repoRoot ? resolveExisting(join(repoRoot, 'examples/jsonrpc-agent/cordis.yml')) : undefined);
 
   if (!repoRoot || !binPath || !cordisPath) {

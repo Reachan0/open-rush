@@ -29,6 +29,14 @@ import { streamText } from 'ai';
 import { claudeCode } from 'ai-sdk-provider-claude-code';
 import { Hono } from 'hono';
 import { tryConnectAmapFromEnv } from './amap-mcp.js';
+import {
+  type Ao04Lease,
+  bindSessionRun,
+  getSessionLease,
+  shouldAbortSession,
+  unbindSessionRun,
+} from './ao04-bind.js';
+import { cancelAo04Experiment, ensureAo04Experiment } from './ao04-experiment.js';
 import { resolveWorkflowWorkspace, tryConnectCodingTools } from './coding-mcp.js';
 import { WORKFLOW_LIVE_HTML } from './workflow-live-page.js';
 import { workflowRunToSseResponse } from './workflow-ui-stream.js';
@@ -36,7 +44,9 @@ import { workflowRunToSseResponse } from './workflow-ui-stream.js';
 const app = new Hono();
 
 // Track active sessions for abort support
-const activeSessions = new Map<string, AbortController>();
+// AIGC START
+const activeSessions = new Map<string, { controller: AbortController; runId: string }>();
+// AIGC END
 
 // AIGC START
 function withStreamCleanup(response: Response, onDone: () => void): Response {
@@ -149,14 +159,56 @@ app.post('/prompt', async (c) => {
 
   const abortController = new AbortController();
   const sid = sessionId ?? crypto.randomUUID();
-  activeSessions.set(sid, abortController);
+  const ao04BindDir = process.env.AO04_BIND_DIR ?? '/tmp/ao04-bind';
+  let ao04Lease: Ao04Lease | undefined;
+  // AIGC START
+  const promptRunId = String(env?.OPENRUSH_RUN_ID ?? sid);
+  // AIGC END
+
+  const releaseAo04 = () => {
+    const rec = activeSessions.get(sid);
+    if (rec?.controller === abortController) {
+      activeSessions.delete(sid);
+    }
+    if (ao04Lease) {
+      unbindSessionRun(ao04Lease.sessionId, ao04Lease.bindingGeneration, ao04BindDir);
+    }
+  };
+
+  // AIGC START
+  if (process.env.AO04_DEMO === '1') {
+    try {
+      const runId = promptRunId;
+      const experimentId = env?.AO04_EXPERIMENT_ID ?? `ao04-${runId}`;
+      await ensureAo04Experiment({
+        experimentId,
+        mode: env?.AO04_MODE ?? 'auto',
+        controlUrl: process.env.AO04_CONTROL_URL ?? env?.AO04_CONTROL_URL,
+        token: process.env.AO04_CONTROL_TOKEN ?? env?.AO04_CONTROL_TOKEN,
+      });
+      ao04Lease = bindSessionRun({
+        bindDir: ao04BindDir,
+        sessionId: sid,
+        runId,
+        experimentId,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json(
+        { error: message },
+        message === 'session_busy' || message.includes('setup_failed') ? 409 : 400
+      );
+    }
+  }
+  activeSessions.set(sid, { controller: abortController, runId: promptRunId });
+  // AIGC END
 
   // Validate projectId before entering the try block so it returns 400, not 500
   if (projectId) {
     try {
       validateProjectId(projectId);
     } catch (err: unknown) {
-      activeSessions.delete(sid);
+      releaseAo04();
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 400);
     }
@@ -206,6 +258,17 @@ app.post('/prompt', async (c) => {
       ...(process.env.NODE_TLS_REJECT_UNAUTHORIZED && {
         NODE_TLS_REJECT_UNAUTHORIZED: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
       }),
+      ...(process.env.AO04_DEMO === '1'
+        ? {
+            AO04_DEMO: '1',
+            AO04_BIND_DIR: process.env.AO04_BIND_DIR ?? '/tmp/ao04-bind',
+            AO04_CONTROL_URL: process.env.AO04_CONTROL_URL ?? 'http://127.0.0.1:18080',
+            ...(process.env.AO04_CONTROL_TOKEN
+              ? { AO04_CONTROL_TOKEN: process.env.AO04_CONTROL_TOKEN }
+              : {}),
+            DSH_SESSION_ID: sid,
+          }
+        : {}),
       // AIGC END
     };
 
@@ -214,7 +277,7 @@ app.post('/prompt', async (c) => {
     const complete = llmCompleteFromEnv();
 
     const laneIntent = routingIntent(userPrompt);
-    if (chooseLane(laneIntent) === 'workflow') {
+    if (process.env.AO04_DEMO !== '1' && chooseLane(laneIntent) === 'workflow') {
       try {
         const tools = await workflowCatalog({
           root: workspaceCwd,
@@ -233,7 +296,7 @@ app.post('/prompt', async (c) => {
               sink,
             })
           ),
-          () => activeSessions.delete(sid)
+          () => releaseAo04()
         );
       } catch (err) {
         console.warn(
@@ -252,7 +315,7 @@ app.post('/prompt', async (c) => {
         abortSignal: abortController.signal,
         env: providerEnv,
       });
-      return withStreamCleanup(response, () => activeSessions.delete(sid));
+      return withStreamCleanup(response, () => releaseAo04());
     }
     // AIGC END
 
@@ -275,13 +338,13 @@ app.post('/prompt', async (c) => {
 
     // Cleanup after stream ends
     Promise.resolve(result.response).then(
-      () => activeSessions.delete(sid),
-      () => activeSessions.delete(sid)
+      () => releaseAo04(),
+      () => releaseAo04()
     );
 
     return response;
   } catch (err: unknown) {
-    activeSessions.delete(sid);
+    releaseAo04();
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ error: message }, 500);
   }
@@ -422,17 +485,55 @@ app.post('/workflow-run', async (c) => {
 });
 
 app.post('/abort', async (c) => {
-  const { sessionId } = (await c.req.json()) as { sessionId?: string };
+  // AIGC START
+  const { sessionId, runId } = (await c.req.json()) as { sessionId?: string; runId?: string };
   if (!sessionId) {
     return c.json({ error: 'sessionId is required' }, 400);
   }
-  const controller = activeSessions.get(sessionId);
-  if (controller) {
-    controller.abort();
-    activeSessions.delete(sessionId);
-    return c.json({ aborted: true });
+  const rec = activeSessions.get(sessionId);
+  const lease = getSessionLease(sessionId);
+  if (!rec && !lease) {
+    return c.json({ aborted: false, reason: 'session not found' }, 404);
   }
-  return c.json({ aborted: false, reason: 'session not found' }, 404);
+  if (
+    !shouldAbortSession({
+      requestedRunId: runId,
+      leaseRunId: lease?.runId,
+      sessionRunId: rec?.runId,
+    })
+  ) {
+    return c.json({ aborted: false, reason: 'run mismatch' });
+  }
+  if (rec) {
+    rec.controller.abort();
+    if (activeSessions.get(sessionId) === rec) {
+      activeSessions.delete(sessionId);
+    }
+  }
+  const pythonCancel =
+    lease && process.env.AO04_DEMO === '1'
+      ? cancelAo04Experiment({
+          experimentId: lease.experimentId,
+          controlUrl: process.env.AO04_CONTROL_URL,
+          token: process.env.AO04_CONTROL_TOKEN,
+          runId: lease.runId,
+          bindingGeneration: lease.bindingGeneration,
+        }).catch((err) => {
+          console.warn(
+            `[AO04] cancel control service failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+        })
+      : Promise.resolve();
+  if (lease) {
+    unbindSessionRun(
+      sessionId,
+      lease.bindingGeneration,
+      process.env.AO04_BIND_DIR ?? '/tmp/ao04-bind'
+    );
+  }
+  await pythonCancel;
+  return c.json({ aborted: true });
+  // AIGC END
 });
 
 const port = Number.parseInt(process.env.PORT ?? '8787', 10);

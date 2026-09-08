@@ -9,6 +9,7 @@ export { messages } from './messages.js';
 export { projectAgents } from './project-agents.js';
 export { projectMembers } from './project-members.js';
 export { projects } from './projects.js';
+export { reliabilityCursors, reliabilityEventIds } from './reliability.js';
 export { runCheckpoints } from './run-checkpoints.js';
 export { runEvents } from './run-events.js';
 export { runs } from './runs.js';

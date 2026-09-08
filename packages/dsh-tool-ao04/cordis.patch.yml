@@ -1,0 +1,3 @@
+- insert:
+    - id: tool-ao04-read-status
+      name: '@open-rush/dsh-tool-ao04'

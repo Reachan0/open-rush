@@ -27,6 +27,10 @@ vi.mock('../coding-mcp.js', () => ({
   codingToolsEnabled: () => false,
   resolveWorkflowWorkspace: (start: string) => start,
 }));
+vi.mock('../ao04-experiment.js', () => ({
+  ensureAo04Experiment: vi.fn(async () => ({ experimentId: 'exp-1', status: 'ready' })),
+  cancelAo04Experiment: vi.fn(async () => undefined),
+}));
 vi.mock('@open-rush/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@open-rush/workflow')>();
   return {
@@ -72,10 +76,14 @@ vi.mock('@open-rush/workflow', async (importOriginal) => {
   };
 });
 
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runDshToUIMessageStream } from '@open-rush/agent-runtime';
 import { workflowRun } from '@open-rush/workflow';
 import { streamText } from 'ai';
 import { claudeCode } from 'ai-sdk-provider-claude-code';
+import { cancelAo04Experiment } from '../ao04-experiment.js';
 import app from '../server.js';
 
 // Helper to parse JSON response body
@@ -86,6 +94,7 @@ async function json(res: Response): Promise<Record<string, unknown>> {
 describe('agent-worker server', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.AO04_DEMO;
   });
 
   // ---------------------------------------------------------------
@@ -465,6 +474,48 @@ describe('agent-worker server', () => {
       // After abort, the session should be removed — trying to abort again yields 404
       const abortAgainRes = await postAbort({ sessionId });
       expect(abortAgainRes.status).toBe(404);
+    });
+
+    it('keeps the first run abortable when a second run is rejected as session_busy', async () => {
+      // AIGC START
+      const prevDemo = process.env.AO04_DEMO;
+      const prevBind = process.env.AO04_BIND_DIR;
+      const prevToken = process.env.AO04_CONTROL_TOKEN;
+      process.env.AO04_DEMO = '1';
+      process.env.AO04_CONTROL_TOKEN = 'secret';
+      process.env.AO04_BIND_DIR = mkdtempSync(join(tmpdir(), 'ao04-bind-'));
+      try {
+        const mockResult = {
+          toUIMessageStreamResponse: vi.fn(() => new Response('stream')),
+          response: new Promise(() => {}),
+        };
+        (streamText as Mock).mockReturnValue(mockResult);
+        const sessionId = 'busy-session-keep-abort';
+        const first = await postPrompt({
+          prompt: 'hello',
+          sessionId,
+          env: { OPENRUSH_RUN_ID: 'run-1' },
+        });
+        expect(first.status).toBe(200);
+        const second = await postPrompt({
+          prompt: 'hello again',
+          sessionId,
+          env: { OPENRUSH_RUN_ID: 'run-2' },
+        });
+        expect(second.status).toBe(409);
+        const abortRes = await postAbort({ sessionId });
+        expect(abortRes.status).toBe(200);
+        expect((await json(abortRes)).aborted).toBe(true);
+        expect(cancelAo04Experiment).toHaveBeenCalled();
+      } finally {
+        if (prevDemo === undefined) delete process.env.AO04_DEMO;
+        else process.env.AO04_DEMO = prevDemo;
+        if (prevBind === undefined) delete process.env.AO04_BIND_DIR;
+        else process.env.AO04_BIND_DIR = prevBind;
+        if (prevToken === undefined) delete process.env.AO04_CONTROL_TOKEN;
+        else process.env.AO04_CONTROL_TOKEN = prevToken;
+      }
+      // AIGC END
     });
   });
 

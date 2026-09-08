@@ -8,6 +8,8 @@ import {
   projectAgents,
   projectMembers,
   projects,
+  reliabilityCursors,
+  reliabilityEventIds,
   runCheckpoints,
   runEvents,
   runs,
@@ -34,6 +36,8 @@ const ALL_TABLES = {
   tasks,
   runs,
   runEvents,
+  reliabilityEventIds,
+  reliabilityCursors,
   runCheckpoints,
   sandboxes,
   artifacts,
@@ -55,6 +59,8 @@ describe('schema table names', () => {
     tasks: 'tasks',
     runs: 'runs',
     runEvents: 'run_events',
+    reliabilityEventIds: 'reliability_event_ids',
+    reliabilityCursors: 'reliability_cursors',
     runCheckpoints: 'run_checkpoints',
     sandboxes: 'sandboxes',
     artifacts: 'artifacts',
@@ -68,9 +74,9 @@ describe('schema table names', () => {
   }
 });
 
-describe('schema test tracks 17 core tables', () => {
-  it('has exactly 17 tracked tables', () => {
-    expect(Object.keys(ALL_TABLES)).toHaveLength(17);
+describe('schema test tracks 19 core tables', () => {
+  it('has exactly 19 tracked tables', () => {
+    expect(Object.keys(ALL_TABLES)).toHaveLength(19);
   });
 });
 

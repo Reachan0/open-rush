@@ -21,10 +21,10 @@ import { v1 } from '@open-rush/contracts';
 import { DrizzleRunDb, RunAlreadyTerminalError, RunService } from '@open-rush/control-plane';
 import { getDbClient, tasks } from '@open-rush/db';
 import { eq } from 'drizzle-orm';
+import { abortAgentSession } from '@/lib/abort-agent-session';
 import { v1Error, v1Success, v1ValidationError } from '@/lib/api/v1-responses';
 import { verifyProjectAccess } from '@/lib/api-utils';
 import { authenticate, hasScope } from '@/lib/auth/unified-auth';
-
 import { mapRunServiceError, runToV1 } from '../../helpers';
 
 export async function POST(
@@ -68,6 +68,12 @@ export async function POST(
 
   try {
     const cancelled = await runService.cancelRun(paramsParsed.data.runId);
+    // AIGC START
+    await abortAgentSession({
+      sessionId: cancelled.taskId || cancelled.id,
+      runId: paramsParsed.data.runId,
+    });
+    // AIGC END
     // Successful transition: service set status='failed' + errorMessage
     // = 'cancelled by user'. Override the wire status to 'cancelled'
     // so the API stays consistent with spec §E2E 3.5.
@@ -80,6 +86,12 @@ export async function POST(
       // Reload defensively in case the original `run` shape has drifted
       // between the pre-flight load and this branch.
       const current = (await runService.getById(paramsParsed.data.runId)) ?? run;
+      // AIGC START
+      await abortAgentSession({
+        sessionId: current.taskId || current.id,
+        runId: paramsParsed.data.runId,
+      });
+      // AIGC END
       return v1Success(
         runToV1(current, { apiAgentId: paramsParsed.data.id, statusOverride: 'cancelled' })
       );

@@ -1,10 +1,15 @@
 import {
   AgentExecutor,
+  appendReliabilitySync,
   DrizzleAgentConfigStore,
   DrizzleEventStore,
+  DrizzleReliabilityDedupe,
   DrizzleRunDb,
+  fetchControlReliabilityEvents,
+  mapControlEvents,
   RunOrchestrator,
   RunService,
+  watchReliabilityUntil,
 } from '@open-rush/control-plane';
 import { closeDbClient, getDbClient, runs, tasks } from '@open-rush/db';
 import {
@@ -117,9 +122,54 @@ async function main() {
       }
 
       console.log(`Processing run/execute — runId=${runId}, agentId=${agentId}`);
-      await orchestrator.execute(runId, prompt, agentId, {
-        runtime: runtime === 'dsh' || runtime === 'claude-code' ? runtime : undefined,
-      });
+      // AIGC START
+      const executeRun = () =>
+        orchestrator.execute(runId, prompt, agentId, {
+          runtime: runtime === 'dsh' || runtime === 'claude-code' ? runtime : undefined,
+        });
+      if (process.env.AO04_DEMO === '1') {
+        const experimentId = process.env.AO04_EXPERIMENT_ID ?? `ao04-${runId}`;
+        const abortWatch = new AbortController();
+        const dedupe = new DrizzleReliabilityDedupe(db);
+        await appendReliabilitySync(eventStore, runId, 'waiting');
+        const watching = watchReliabilityUntil({
+          eventStore,
+          dedupe,
+          runId,
+          experimentId,
+          signal: abortWatch.signal,
+          fetchEvents: async (after) => {
+            const raw = await fetchControlReliabilityEvents({
+              controlUrl: process.env.AO04_CONTROL_URL ?? 'http://127.0.0.1:18080',
+              token: process.env.AO04_CONTROL_TOKEN ?? '',
+              experimentId,
+              after,
+            });
+            return mapControlEvents(raw, runId, experimentId);
+          },
+        }).catch(async (err) => {
+          console.error('reliability watch failed', err);
+          await appendReliabilitySync(
+            eventStore,
+            runId,
+            'error',
+            err instanceof Error ? err.message : String(err)
+          );
+          return { ingested: 0, duplicates: 0 };
+        });
+        try {
+          await executeRun();
+        } finally {
+          abortWatch.abort();
+          const result = await watching;
+          console.log(
+            `reliability watch drained — ingested=${result.ingested} duplicates=${result.duplicates}`
+          );
+        }
+      } else {
+        await executeRun();
+      }
+      // AIGC END
       console.log(`Completed run/execute — runId=${runId}`);
     }
   );

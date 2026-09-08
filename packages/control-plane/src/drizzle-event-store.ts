@@ -79,11 +79,14 @@ export class DrizzleEventStore implements EventStore {
    * - avoids SERIALIZABLE isolation (no caller-side retry needed)
    * - advisory lock key is stable across connections / pools
    */
-  async appendAssignSeq(event: EventStoreEventWithoutSeq): Promise<InsertResult> {
+  async appendAssignSeq(
+    event: EventStoreEventWithoutSeq,
+    options?: { tx?: unknown }
+  ): Promise<InsertResult> {
     const schemaVersion = event.schemaVersion ?? '1';
     const payload = structuredClone(event.payload) ?? null;
 
-    return await this.db.transaction(async (tx) => {
+    const run = async (tx: DbClient) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${event.runId}::text))`);
 
       const [inserted] = await tx
@@ -102,13 +105,18 @@ export class DrizzleEventStore implements EventStore {
       }
 
       return {
-        inserted: true,
+        inserted: true as const,
         event: clone({
           ...inserted,
           createdAt: inserted.createdAt,
         }),
       };
-    });
+    };
+
+    if (options?.tx) {
+      return run(options.tx as DbClient);
+    }
+    return this.db.transaction(async (tx) => run(tx as unknown as DbClient));
   }
 
   async getEvents(runId: string, afterSeq = -1): Promise<RunEvent[]> {

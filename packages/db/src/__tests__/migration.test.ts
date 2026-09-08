@@ -73,6 +73,8 @@ describe('migration replay on clean database', () => {
     expect(tables).toContain('vault_entries');
     expect(tables).toContain('agent_definition_versions');
     expect(tables).toContain('service_tokens');
+    expect(tables).toContain('reliability_event_ids');
+    expect(tables).toContain('reliability_cursors');
   });
 
   it('service_tokens partial active index exists with correct predicate', async () => {

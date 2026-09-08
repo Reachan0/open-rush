@@ -96,6 +96,19 @@ describe('applyAssistantParts', () => {
       errorText: 'exit 1',
     });
   });
+
+  it('keeps data-openrush-reliability parts for the panel', () => {
+    const parts = applyAssistantParts([], {
+      type: 'data-openrush-reliability',
+      data: { type: 'incident.detected', eventId: 'e1', sourceSeq: 8 },
+    });
+    expect(parts).toEqual([
+      {
+        type: 'data-openrush-reliability',
+        data: { type: 'incident.detected', eventId: 'e1', sourceSeq: 8 },
+      },
+    ]);
+  });
 });
 
 describe('isStreamComplete', () => {

@@ -51,7 +51,10 @@ export interface EventStore {
    * events — must funnel through here to preserve per-run monotonic
    * ordering and the `(run_id, seq)` unique contract.
    */
-  appendAssignSeq(event: EventStoreEventWithoutSeq): Promise<InsertResult>;
+  appendAssignSeq(
+    event: EventStoreEventWithoutSeq,
+    options?: { tx?: unknown }
+  ): Promise<InsertResult>;
 
   getEvents(runId: string, afterSeq?: number): Promise<RunEvent[]>;
   getLastSeq(runId: string): Promise<number>;
@@ -97,7 +100,10 @@ export class InMemoryEventStore implements EventStore {
     return { inserted: true, event: clone(runEvent) };
   }
 
-  async appendAssignSeq(event: EventStoreEventWithoutSeq): Promise<InsertResult> {
+  async appendAssignSeq(
+    event: EventStoreEventWithoutSeq,
+    _options?: { tx?: unknown }
+  ): Promise<InsertResult> {
     const chain = this.writeLocks.get(event.runId) ?? Promise.resolve();
     const next = chain.then(() => this.doAssignSeq(event));
     // Keep the chain alive even on error so subsequent writers still serialize.

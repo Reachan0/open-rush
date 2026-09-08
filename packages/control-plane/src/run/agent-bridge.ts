@@ -70,11 +70,14 @@ export class AgentBridge {
   }
 
   async abort(sessionId: string): Promise<void> {
+    // AIGC START
     await fetch(`${this.config.agentWorkerUrl}/abort`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs ?? 2000),
     });
+    // AIGC END
   }
 
   async healthCheck(): Promise<boolean> {

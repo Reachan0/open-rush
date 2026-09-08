@@ -15,6 +15,7 @@ const {
   mockVerifyProjectAccess,
   mockGetById,
   mockCancelRun,
+  mockAbortAgentSession,
   dbFake,
   FakeRunAlreadyTerminalError,
   FakeRunCannotCancelError,
@@ -60,6 +61,7 @@ const {
     mockVerifyProjectAccess: vi.fn(),
     mockGetById: vi.fn(),
     mockCancelRun: vi.fn(),
+    mockAbortAgentSession: vi.fn(async () => undefined),
     dbFake: {
       __select: selectSpy,
       select: (...projArgs: unknown[]) => makeSelectChain(projArgs),
@@ -77,6 +79,10 @@ vi.mock('@/lib/auth/unified-auth', () => ({
 vi.mock('@/lib/api-utils', () => ({
   verifyProjectAccess: (projectId: string, userId: string) =>
     mockVerifyProjectAccess(projectId, userId),
+}));
+
+vi.mock('@/lib/abort-agent-session', () => ({
+  abortAgentSession: (...args: unknown[]) => mockAbortAgentSession(...args),
 }));
 
 vi.mock('@open-rush/control-plane', () => ({
@@ -208,6 +214,7 @@ describe('POST /api/v1/agents/:agentId/runs/:runId/cancel', () => {
     expect(body.data.status).toBe('cancelled');
     expect(body.data.errorMessage).toBe('cancelled by user');
     expect(mockCancelRun).toHaveBeenCalledWith(RUN_ID);
+    expect(mockAbortAgentSession).toHaveBeenCalledWith({ sessionId: TASK_ID, runId: RUN_ID });
   });
 
   it('200 idempotent: already-terminal run returns status cancelled', async () => {
@@ -225,6 +232,7 @@ describe('POST /api/v1/agents/:agentId/runs/:runId/cancel', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: { status: string } };
     expect(body.data.status).toBe('cancelled');
+    expect(mockAbortAgentSession).toHaveBeenCalledWith({ sessionId: TASK_ID, runId: RUN_ID });
   });
 
   it('400 VALIDATION_ERROR on finalizing_retryable_failed', async () => {

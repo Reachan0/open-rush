@@ -89,6 +89,7 @@ export type AssistantToolPart = {
 export type AssistantStreamPart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
+  | { type: 'data-openrush-reliability'; data: unknown }
   | AssistantToolPart;
 
 function dropEmptyText(parts: AssistantStreamPart[]): AssistantStreamPart[] {
@@ -196,6 +197,16 @@ export function applyAssistantParts(
       state: 'output-error',
       errorText: String(p.errorText ?? p.error ?? 'tool error'),
     });
+  }
+  if (p.type === 'data-openrush-reliability') {
+    const next = dropEmptyText(parts);
+    return [
+      ...next,
+      {
+        type: 'data-openrush-reliability',
+        data: p.data ?? p,
+      },
+    ];
   }
   return parts;
 }

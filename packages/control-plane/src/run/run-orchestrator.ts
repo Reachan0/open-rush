@@ -133,8 +133,17 @@ export class RunOrchestrator {
       const { response } = await agentBridge.sendPrompt(fullPrompt, {
         // AIGC START
         sessionId: run?.taskId ?? runId,
+        env: {
+          ...(agentContext?.env ?? {}),
+          ...(process.env.AO04_DEMO === '1'
+            ? {
+                OPENRUSH_RUN_ID: runId,
+                AO04_EXPERIMENT_ID: process.env.AO04_EXPERIMENT_ID ?? `ao04-${runId}`,
+                AO04_MODE: process.env.AO04_MODE ?? 'auto',
+              }
+            : {}),
+        },
         // AIGC END
-        env: agentContext?.env,
         allowedTools: agentContext?.agentConfig.allowedTools,
         maxTurns: agentContext?.agentConfig.maxSteps,
         projectId: agentContext?.projectId,

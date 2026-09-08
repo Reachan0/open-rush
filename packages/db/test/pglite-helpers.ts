@@ -12,6 +12,8 @@ const TABLE_NAMES = [
   'artifacts',
   'run_checkpoints',
   'run_events',
+  'reliability_event_ids',
+  'reliability_cursors',
   'runs',
   'tasks',
   'sandboxes',
@@ -338,6 +340,21 @@ async function applySchema(db: TestDb): Promise<void> {
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
   `)
     .catch(() => {});
+
+  // AO-04 reliability ingest (eventId dedupe + sourceSeq cursor)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS reliability_event_ids (
+      event_id VARCHAR(128) PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS reliability_cursors (
+      experiment_id VARCHAR(255) PRIMARY KEY,
+      source_seq BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
 
   // Run events
   await db.execute(sql`

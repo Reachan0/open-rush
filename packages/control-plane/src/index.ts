@@ -33,6 +33,20 @@ export { type ConsumeResult, IdempotentConsumer } from './idempotent-consumer.js
 export * from './mcp/index.js';
 export * from './memory/index.js';
 export * from './project/index.js';
+export { DrizzleReliabilityDedupe } from './reliability/drizzle-dedupe.js';
+export {
+  InMemoryReliabilityDedupe,
+  ingestReliabilityEvents,
+  type ReliabilityDedupe,
+  type ReliabilityEvent,
+} from './reliability/ingest.js';
+export { pullReliabilityTail } from './reliability/poll.js';
+export {
+  appendReliabilitySync,
+  fetchControlReliabilityEvents,
+  mapControlEvents,
+  watchReliabilityUntil,
+} from './reliability/watch.js';
 export * from './run/index.js';
 export * from './skills/index.js';
 export * from './task/index.js';
