@@ -10,6 +10,33 @@ function event(type: string, data: Record<string, unknown> = {}) {
 }
 
 describe('DshEventMapper', () => {
+  it('ends only unfinished tool cards when a model stream fails', () => {
+    const mapper = new DshEventMapper('m');
+    mapper.pushNotification(event('tool/call', { callId: 'done', name: 'read', arguments: '{}' }));
+    mapper.pushNotification(
+      event('tool/result', {
+        callId: 'done',
+        message: { content: [{ type: 'text', text: 'ok' }] },
+      })
+    );
+    mapper.pushNotification(
+      event('assistant/chunk', {
+        chunk: {
+          type: 'tool-call-delta',
+          id: 'partial',
+          name: 'workflow_run',
+          argumentsDelta: '{',
+        },
+      })
+    );
+    const outputs = mapper
+      .error('notification timeout')
+      .filter((x) => x.type === 'tool-output-error');
+    expect(outputs).toEqual([
+      { type: 'tool-output-error', toolCallId: 'partial', errorText: 'notification timeout' },
+    ]);
+  });
+
   it('maps text deltas into UIMessageChunk text family', () => {
     const mapper = new DshEventMapper('msg-1');
     const chunks = [

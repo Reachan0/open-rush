@@ -18,8 +18,10 @@ function persist(bindDir: string | undefined, lease: Ao04Lease): void {
   writeFileSync(join(bindDir, `${lease.sessionId}.json`), JSON.stringify(lease));
 }
 
-export function getSessionLease(sessionId: string): Ao04Lease | undefined {
-  return leases.get(sessionId);
+export function getSessionLease(sessionId: string, now = Date.now()): Ao04Lease | undefined {
+  const lease = leases.get(sessionId);
+  if (!lease || lease.leaseUntil <= now) return undefined;
+  return lease;
 }
 
 export function shouldAbortSession(input: {

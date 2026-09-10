@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { withRequestContext } from '../context.js';
 import { createLogger } from '../logger.js';
 
@@ -13,6 +13,18 @@ function collectLogs() {
 }
 
 describe('createLogger', () => {
+  it('can disable worker-based pretty transport in a development web bundle', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    try {
+      const { chunks, dest } = collectLogs();
+      const logger = createLogger({ service: 'web-test', destination: dest });
+      logger.info('persist me');
+      expect(JSON.parse(chunks[0]).msg).toBe('persist me');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it('creates a pino logger with expected methods', () => {
     const logger = createLogger({ service: 'test-service' });
     expect(logger).toBeDefined();

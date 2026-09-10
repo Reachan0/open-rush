@@ -30,6 +30,7 @@ vi.mock('../coding-mcp.js', () => ({
 vi.mock('../ao04-experiment.js', () => ({
   ensureAo04Experiment: vi.fn(async () => ({ experimentId: 'exp-1', status: 'ready' })),
   cancelAo04Experiment: vi.fn(async () => undefined),
+  releaseAo04Experiment: vi.fn(async () => undefined),
 }));
 vi.mock('@open-rush/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@open-rush/workflow')>();
@@ -83,7 +84,7 @@ import { runDshToUIMessageStream } from '@open-rush/agent-runtime';
 import { workflowRun } from '@open-rush/workflow';
 import { streamText } from 'ai';
 import { claudeCode } from 'ai-sdk-provider-claude-code';
-import { cancelAo04Experiment } from '../ao04-experiment.js';
+import { cancelAo04Experiment, releaseAo04Experiment } from '../ao04-experiment.js';
 import app from '../server.js';
 
 // Helper to parse JSON response body
@@ -95,6 +96,7 @@ describe('agent-worker server', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.AO04_DEMO;
+    delete process.env.AO04_SERVICE_DEMO;
   });
 
   // ---------------------------------------------------------------
@@ -516,6 +518,62 @@ describe('agent-worker server', () => {
         else process.env.AO04_CONTROL_TOKEN = prevToken;
       }
       // AIGC END
+    });
+
+    it('finishes a DSH response only after the fixed service lease is released', async () => {
+      const prevDemo = process.env.AO04_DEMO;
+      const prevServiceDemo = process.env.AO04_SERVICE_DEMO;
+      const prevBind = process.env.AO04_BIND_DIR;
+      const prevToken = process.env.AO04_CONTROL_TOKEN;
+      const prevWorkspace = process.env.WORKSPACE_PATH;
+      process.env.AO04_DEMO = '1';
+      process.env.AO04_SERVICE_DEMO = '1';
+      process.env.AO04_CONTROL_TOKEN = 'secret';
+      process.env.AO04_BIND_DIR = mkdtempSync(join(tmpdir(), 'ao04-bind-release-'));
+      const demoWorkspace = mkdtempSync(join(tmpdir(), 'ao04-workspace-'));
+      process.env.WORKSPACE_PATH = demoWorkspace;
+      let finishRelease: (() => void) | undefined;
+      (releaseAo04Experiment as Mock).mockImplementation(
+        () => new Promise<void>((resolve) => (finishRelease = resolve))
+      );
+      try {
+        const response = await postPrompt({
+          prompt: 'check protected service',
+          runtime: 'dsh',
+          sessionId: 'fixed-service-session',
+          env: { OPENRUSH_RUN_ID: 'fixed-service-run' },
+        });
+        let bodyFinished = false;
+        const body = response.text().then((value) => {
+          bodyFinished = true;
+          return value;
+        });
+        await vi.waitFor(() =>
+          expect(releaseAo04Experiment).toHaveBeenCalledWith(
+            expect.objectContaining({
+              experimentId: 'ao04-demo-local',
+              runId: 'fixed-service-run',
+            })
+          )
+        );
+        expect(bodyFinished).toBe(false);
+        finishRelease?.();
+        await expect(body).resolves.toBe('dsh-ok');
+        expect(runDshToUIMessageStream).toHaveBeenCalledWith(
+          expect.objectContaining({ cwd: demoWorkspace })
+        );
+      } finally {
+        if (prevDemo === undefined) delete process.env.AO04_DEMO;
+        else process.env.AO04_DEMO = prevDemo;
+        if (prevServiceDemo === undefined) delete process.env.AO04_SERVICE_DEMO;
+        else process.env.AO04_SERVICE_DEMO = prevServiceDemo;
+        if (prevBind === undefined) delete process.env.AO04_BIND_DIR;
+        else process.env.AO04_BIND_DIR = prevBind;
+        if (prevToken === undefined) delete process.env.AO04_CONTROL_TOKEN;
+        else process.env.AO04_CONTROL_TOKEN = prevToken;
+        if (prevWorkspace === undefined) delete process.env.WORKSPACE_PATH;
+        else process.env.WORKSPACE_PATH = prevWorkspace;
+      }
     });
   });
 

@@ -1,6 +1,12 @@
 import type { CreateSandboxOptions, SandboxInfo, SandboxProvider } from '@open-rush/sandbox';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InMemoryEventStore } from '../event-store.js';
+import {
+  type EventStoreEvent,
+  type EventStoreEventWithoutSeq,
+  InMemoryEventStore,
+} from '../event-store.js';
+import { InMemoryReliabilityDedupe, ingestReliabilityEvents } from '../reliability/ingest.js';
+import { appendReliabilitySync } from '../reliability/watch.js';
 import { RunOrchestrator } from '../run/run-orchestrator.js';
 import type { CreateRunInput, Run, RunDb } from '../run/run-service.js';
 import { RunService } from '../run/run-service.js';
@@ -151,6 +157,48 @@ function mockSSEErrorResponse(status = 500): Response {
     status,
     statusText: 'Internal Server Error',
   });
+}
+
+class InterleavingEventStore extends InMemoryEventStore {
+  private reliabilityAppended = false;
+
+  constructor(private readonly appendReliabilityEvent: () => Promise<void>) {
+    super();
+  }
+
+  override async append(event: EventStoreEvent) {
+    await this.appendReliabilityBefore(event.eventType);
+    return super.append(event);
+  }
+
+  override async appendAssignSeq(event: EventStoreEventWithoutSeq) {
+    await this.appendReliabilityBefore(event.eventType);
+    return super.appendAssignSeq(event);
+  }
+
+  private async appendReliabilityBefore(eventType: string): Promise<void> {
+    if (!this.reliabilityAppended && eventType === 'tool-output-available') {
+      this.reliabilityAppended = true;
+      await this.appendReliabilityEvent();
+    }
+  }
+}
+
+class CancellingEventStore extends InMemoryEventStore {
+  private cancelled = false;
+
+  constructor(private readonly cancel: () => Promise<void>) {
+    super();
+  }
+
+  override async appendAssignSeq(event: EventStoreEventWithoutSeq) {
+    const result = await super.appendAssignSeq(event);
+    if (!this.cancelled && event.eventType === 'finish') {
+      this.cancelled = true;
+      await this.cancel();
+    }
+    return result;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +377,53 @@ describe('RunOrchestrator', () => {
       expect(body.runtime).toBe('dsh');
     });
 
+    it('does not finalize or emit success after a concurrent cancellation at stream end', async () => {
+      const previous = process.env.OPENRUSH_V1_EVENTS_ENABLED;
+      process.env.OPENRUSH_V1_EVENTS_ENABLED = 'true';
+      try {
+        const run = makeQueuedRun('run-cancel-race');
+        run.agentDefinitionVersion = 3;
+        runDb.seed(run);
+
+        const cancellingStore = new CancellingEventStore(async () => {
+          await runService.cancelRun(run.id);
+        });
+        eventStore = cancellingStore;
+        orchestrator = new RunOrchestrator({
+          runService,
+          sandboxProvider,
+          eventStore,
+        });
+        const transitionSpy = vi.spyOn(runService, 'transition');
+        fetchMock.mockResolvedValueOnce(mockSSEResponse([{ type: 'finish', reason: 'stop' }]));
+
+        await orchestrator.execute(run.id, 'test', 'agent-1');
+
+        const finalRun = await runDb.findById(run.id);
+        expect(finalRun?.status).toBe('failed');
+        expect(finalRun?.errorMessage).toBe(RunService.CANCELLED_MESSAGE);
+        expect(transitionSpy.mock.calls.some(([, status]) => status === 'finalizing_prepare')).toBe(
+          false
+        );
+        expect((await eventStore.getEvents(run.id)).map((event) => event.eventType)).not.toContain(
+          'data-openrush-run-done'
+        );
+      } finally {
+        if (previous === undefined) delete process.env.OPENRUSH_V1_EVENTS_ENABLED;
+        else process.env.OPENRUSH_V1_EVENTS_ENABLED = previous;
+      }
+    });
+
+    it('finalizes normally when the run remains running after stream consumption', async () => {
+      const run = makeQueuedRun('run-normal-stream-end');
+      runDb.seed(run);
+      fetchMock.mockResolvedValueOnce(mockSSEResponse([{ type: 'finish', reason: 'stop' }]));
+
+      await orchestrator.execute(run.id, 'test', 'agent-1');
+
+      expect((await runDb.findById(run.id))?.status).toBe('completed');
+    });
+
     it('passes through startedAt when entering running state', async () => {
       const run = makeQueuedRun('run-3');
       runDb.seed(run);
@@ -426,6 +521,21 @@ describe('RunOrchestrator', () => {
   // -------------------------------------------------------------------------
 
   describe('stream error', () => {
+    it('marks a model stream error failed even when the HTTP stream returns 200', async () => {
+      const run = makeQueuedRun('run-model-timeout');
+      runDb.seed(run);
+      fetchMock.mockResolvedValueOnce(
+        mockSSEResponse([
+          { type: 'error', errorText: 'DSH model idle timeout' },
+          { type: 'finish', finishReason: 'error' },
+        ])
+      );
+      await orchestrator.execute(run.id, 'test', 'agent-1');
+      expect((await runService.getById(run.id))?.status).toBe('failed');
+      expect((await runService.getById(run.id))?.errorMessage).toContain('idle timeout');
+      expect((await eventStore.getEvents(run.id)).map((e) => e.eventType)).toContain('error');
+    });
+
     it('transitions to failed when agent-worker returns 500', async () => {
       const run = makeQueuedRun('run-500');
       runDb.seed(run);
@@ -620,6 +730,69 @@ describe('RunOrchestrator', () => {
         process.env.OPENRUSH_V1_EVENTS_ENABLED = prev;
       } else {
         delete process.env.OPENRUSH_V1_EVENTS_ENABLED;
+      }
+    });
+
+    it('preserves interleaved AO04 reliability events when v1 events are disabled', async () => {
+      delete process.env.OPENRUSH_V1_EVENTS_ENABLED;
+      const previousAo04Demo = process.env.AO04_DEMO;
+      process.env.AO04_DEMO = '1';
+
+      try {
+        const run = makeQueuedRun('run-ao04-interleaved');
+        runDb.seed(run);
+
+        let interleavedStore: InterleavingEventStore;
+        const dedupe = new InMemoryReliabilityDedupe();
+        const reliabilityEvent = {
+          eventId: 'reliability-1',
+          sourceSeq: 1,
+          experimentId: 'exp-1',
+          runId: 'run-ao04-interleaved',
+          type: 'tool.output.available',
+        };
+        interleavedStore = new InterleavingEventStore(async () => {
+          await appendReliabilitySync(interleavedStore, 'run-ao04-interleaved', 'waiting');
+          await ingestReliabilityEvents({
+            eventStore: interleavedStore,
+            dedupe,
+            runId: 'run-ao04-interleaved',
+            events: [reliabilityEvent],
+          });
+        });
+        eventStore = interleavedStore;
+        orchestrator = new RunOrchestrator({
+          runService,
+          sandboxProvider,
+          eventStore,
+        });
+
+        fetchMock.mockResolvedValueOnce(
+          mockSSEResponse([
+            { type: 'tool-input-available', tool: 'read' },
+            { type: 'tool-output-available', output: 'ok' },
+            { type: 'reasoning-start', id: 'reasoning-1' },
+            { type: 'exit', code: 0 },
+          ])
+        );
+
+        await orchestrator.execute('run-ao04-interleaved', 'test', 'agent-1');
+
+        const events = await eventStore.getEvents('run-ao04-interleaved');
+        expect(events.map((event) => event.eventType)).toEqual([
+          'tool-input-available',
+          'data-openrush-reliability',
+          'data-openrush-reliability',
+          'tool-output-available',
+          'reasoning-start',
+          'exit',
+        ]);
+        const seqs = events.map((event) => event.seq);
+        expect(new Set(seqs).size).toBe(events.length);
+        expect(seqs).toEqual([1, 2, 3, 4, 5, 6]);
+      } finally {
+        if (previousAo04Demo === undefined) delete process.env.AO04_DEMO;
+        else process.env.AO04_DEMO = previousAo04Demo;
       }
     });
 

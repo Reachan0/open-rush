@@ -73,7 +73,7 @@ describe('wrapCodingInvoker', () => {
       async invoke(_name: string, args: Record<string, unknown>) {
         seen.push(String(args.path));
         if (args.path === 'README') throw new Error('NOT_FOUND: Path not found: README');
-        return { path: args.path, content: '# hi' };
+        return { path: String(args.path), content: '# hi' };
       },
     };
     const wrapped = wrapCodingInvoker(inner);

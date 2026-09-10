@@ -7,7 +7,21 @@ import type { DshInitializeParams, DshLaunchSpec, DshNotification } from './dsh-
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 };
+
+export interface DshJsonRpcClientOptions {
+  requestTimeoutMs?: number;
+}
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+export class DshRequestTimeoutError extends Error {
+  constructor(method: string, timeoutMs: number) {
+    super(`DeepSeek Harness request timed out: ${method} after ${timeoutMs}ms`);
+    this.name = 'DshRequestTimeoutError';
+  }
+}
 
 export class DshJsonRpcClient {
   private child: ChildProcess | undefined;
@@ -20,11 +34,20 @@ export class DshJsonRpcClient {
   }> = [];
   private readonly queue: DshNotification[] = [];
   private failure: Error | undefined;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     private readonly launch: DshLaunchSpec,
-    private readonly env: NodeJS.ProcessEnv
-  ) {}
+    private readonly env: NodeJS.ProcessEnv,
+    options: DshJsonRpcClientOptions = {}
+  ) {
+    this.requestTimeoutMs =
+      typeof options.requestTimeoutMs === 'number' &&
+      Number.isFinite(options.requestTimeoutMs) &&
+      options.requestTimeoutMs > 0
+        ? options.requestTimeoutMs
+        : DEFAULT_REQUEST_TIMEOUT_MS;
+  }
 
   isAlive(): boolean {
     const child = this.child;
@@ -84,12 +107,11 @@ export class DshJsonRpcClient {
     if (this.closed) return;
     this.closed = true;
     try {
-      await Promise.race([this.request('shutdown', {}), sleep(1000)]);
+      await Promise.race([this.request('shutdown', {}, true), sleep(1000)]);
     } catch {
       // shutdown is best-effort; the process is reaped below
     }
     const child = this.child;
-    this.child = undefined;
     if (!child) {
       this.failAll(new Error('DeepSeek Harness runtime closed'));
       return;
@@ -104,15 +126,26 @@ export class DshJsonRpcClient {
       child.kill('SIGKILL');
     }
     this.failAll(new Error('DeepSeek Harness runtime closed'));
+    this.child = undefined;
   }
 
-  private request(method: string, params: object): Promise<unknown> {
+  private request(method: string, params: object, internal = false): Promise<unknown> {
+    if (this.closed && !internal) {
+      return Promise.reject(new Error('DeepSeek Harness runtime closed'));
+    }
+    if (this.failure) return Promise.reject(this.failure);
     const id = `req_${randomUUID().replaceAll('-', '')}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new DshRequestTimeoutError(method, this.requestTimeoutMs));
+      }, this.requestTimeoutMs);
+      timer.unref?.();
+      this.pending.set(id, { resolve, reject, timer });
       try {
         this.write({ jsonrpc: '2.0', id, method, params });
       } catch (error) {
+        clearTimeout(timer);
         this.pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -150,6 +183,7 @@ export class DshJsonRpcClient {
       const pending = this.pending.get(String(id));
       if (!pending) return;
       this.pending.delete(String(id));
+      clearTimeout(pending.timer);
       if (frame.error && typeof frame.error === 'object') {
         const error = frame.error as { message?: string };
         pending.reject(new Error(error.message ?? 'JSON-RPC error'));
@@ -175,7 +209,10 @@ export class DshJsonRpcClient {
 
   private failAll(error: Error): void {
     this.failure ??= error;
-    for (const pending of this.pending.values()) pending.reject(this.failure);
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(this.failure);
+    }
     this.pending.clear();
     for (const waiter of this.waiters.splice(0)) waiter.reject(this.failure);
     (this.child?.stdout as Readable | undefined)?.removeAllListeners('data');

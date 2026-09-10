@@ -19,6 +19,7 @@ import {
 } from '@open-rush/sandbox';
 import { and, eq } from 'drizzle-orm';
 import { PgBoss } from 'pg-boss';
+import { resolveAo04ExperimentId } from './ao04-experiment.js';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://rush:rush@localhost:5432/rush';
 const OPENSANDBOX_API_URL = process.env.OPENSANDBOX_API_URL ?? 'http://localhost:8090';
@@ -128,7 +129,7 @@ async function main() {
           runtime: runtime === 'dsh' || runtime === 'claude-code' ? runtime : undefined,
         });
       if (process.env.AO04_DEMO === '1') {
-        const experimentId = process.env.AO04_EXPERIMENT_ID ?? `ao04-${runId}`;
+        const experimentId = resolveAo04ExperimentId(runId);
         const abortWatch = new AbortController();
         const dedupe = new DrizzleReliabilityDedupe(db);
         await appendReliabilitySync(eventStore, runId, 'waiting');

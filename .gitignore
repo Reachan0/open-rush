@@ -42,4 +42,13 @@ test-results/
 /apps/agent-worker/css/
 /apps/agent-worker/js/
 /apps/agent-worker/index.html
+
+# AO-04 local demo runtime and generated evidence. These may contain local
+# control tokens, database URLs, process state, and full runtime copies.
+/ao04-integration/**/results/
+/ao04-integration/m3-fastlane/web-e2e-current.json
+/ao04-integration/**/__pycache__/
+/ao04-integration/**/*review*.txt
+/ao04-integration/**/dirty-*.txt
+/ao04-integration/**/final-fix-*.txt
 # AIGC END

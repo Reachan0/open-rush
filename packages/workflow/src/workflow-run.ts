@@ -7,6 +7,7 @@ import { runTravelAgentLoop } from './loop-simulator.js';
 import type {
   FallbackReason,
   JsonValue,
+  NodeResult,
   ToolInvoker,
   WorkflowDsl,
   WorkflowEvent,
@@ -33,16 +34,22 @@ export interface WorkflowRunInput {
   disableFallback?: boolean;
 }
 
-function reasonFromError(err: unknown): { reason: FallbackReason; nodeId?: string; error: string } {
+function reasonFromError(err: unknown): {
+  reason: FallbackReason;
+  nodeId?: string;
+  error: string;
+  details?: JsonValue;
+} {
   const error = err instanceof Error ? err.message : String(err);
   if (err instanceof WorkflowError) {
     if (err.code === 'generate_failed')
-      return { reason: 'generate_failed', error, nodeId: err.nodeId };
+      return { reason: 'generate_failed', error, nodeId: err.nodeId, details: err.details };
     if (err.code === 'guard_max_steps')
-      return { reason: 'guard_max_steps', error, nodeId: err.nodeId };
+      return { reason: 'guard_max_steps', error, nodeId: err.nodeId, details: err.details };
     if (err.code === 'guard_max_loop')
-      return { reason: 'guard_max_loop', error, nodeId: err.nodeId };
-    if (err.code === 'guard_timeout') return { reason: 'guard_timeout', error, nodeId: err.nodeId };
+      return { reason: 'guard_max_loop', error, nodeId: err.nodeId, details: err.details };
+    if (err.code === 'guard_timeout')
+      return { reason: 'guard_timeout', error, nodeId: err.nodeId, details: err.details };
     if (
       err.code === 'duplicate_id' ||
       err.code === 'missing_dep' ||
@@ -50,9 +57,9 @@ function reasonFromError(err: unknown): { reason: FallbackReason; nodeId?: strin
       err.code === 'unknown_tool' ||
       err.code === 'validate_failed'
     ) {
-      return { reason: 'validate_failed', error, nodeId: err.nodeId };
+      return { reason: 'validate_failed', error, nodeId: err.nodeId, details: err.details };
     }
-    return { reason: 'node_failed', error, nodeId: err.nodeId };
+    return { reason: 'node_failed', error, nodeId: err.nodeId, details: err.details };
   }
   return { reason: 'node_failed', error };
 }
@@ -85,6 +92,8 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
     extra?: {
       dsl?: WorkflowDsl;
       nodeId?: string;
+      nodes?: NodeResult[];
+      details?: JsonValue;
       rounds?: number;
       usage?: WorkflowRunResult['usage'];
     }
@@ -97,6 +106,8 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         error,
         nodeId: extra?.nodeId,
         dsl: extra?.dsl,
+        nodes: extra?.nodes,
+        details: extra?.details,
         events,
         rounds: extra?.rounds ?? 0,
         durationMs: Date.now() - started,
@@ -113,6 +124,8 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         error,
         nodeId: extra?.nodeId,
         dsl: extra?.dsl,
+        nodes: extra?.nodes,
+        details: extra?.details,
         output,
         events,
         rounds: (extra?.rounds ?? 0) + 7,
@@ -127,6 +140,8 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         error: `${error}; fallback failed: ${fbErr instanceof Error ? fbErr.message : String(fbErr)}`,
         nodeId: extra?.nodeId,
         dsl: extra?.dsl,
+        nodes: extra?.nodes,
+        details: extra?.details,
         events,
         rounds: extra?.rounds ?? 0,
         durationMs: Date.now() - started,
@@ -142,6 +157,10 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
   try {
     if (input.dsl) {
       dsl = input.dsl as WorkflowDsl;
+      await sink.emit({
+        eventType: 'workflow-plan',
+        payload: { source: 'given', attempts: 0, dsl },
+      });
     } else {
       if (!input.intent) {
         throw new WorkflowError('generate_failed', 'intent or dsl is required');
@@ -156,10 +175,15 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         tools: await input.tools.listTools(),
         complete,
         allowHeuristic: input.allowHeuristic ?? !complete,
+        signal: input.signal,
       });
       dsl = generated.dsl;
       rounds = generated.attempts;
       usage = generated.usage;
+      await sink.emit({
+        eventType: 'workflow-plan',
+        payload: { source: generated.source, attempts: generated.attempts, dsl },
+      });
     }
   } catch (err) {
     const mapped = reasonFromError(err);
@@ -202,7 +226,14 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
   } catch (err) {
     const mapped = reasonFromError(err);
     await sink.emit({ eventType: 'workflow-fallback', payload: mapped });
-    return runFallback(mapped.reason, mapped.error, { dsl, nodeId: mapped.nodeId, rounds, usage });
+    return runFallback(mapped.reason, mapped.error, {
+      dsl,
+      nodeId: mapped.nodeId,
+      nodes: err instanceof WorkflowError ? err.nodes : undefined,
+      details: mapped.details,
+      rounds,
+      usage,
+    });
   }
 }
 // AIGC END

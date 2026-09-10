@@ -193,7 +193,7 @@ describe('POST /api/v1/auth/tokens', () => {
   it('201 with plaintext on success (session auth)', async () => {
     mockAuthenticate.mockResolvedValue({ userId: 'u1', scopes: ['*'], authType: 'session' });
     const createdAt = new Date('2026-04-01T00:00:00.000Z');
-    const expiresAt = new Date('2026-07-01T00:00:00.000Z');
+    const expiresAt = new Date(futureIso());
     mockCreateToken.mockResolvedValue({
       id: 'tok-1',
       token: 'sk_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_abcdefghij',

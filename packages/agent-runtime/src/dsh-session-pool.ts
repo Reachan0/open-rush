@@ -23,6 +23,10 @@ type Slot = {
 
 const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error('DeepSeek Harness request aborted');
+}
+
 export class DshSessionPool {
   private readonly slots = new Map<string, Slot>();
   private readonly idleMs: number;
@@ -35,6 +39,7 @@ export class DshSessionPool {
   }
 
   async acquire(input: DshRunInput): Promise<DshPooledClient> {
+    throwIfAborted(input.abortSignal);
     const existing = this.slots.get(input.sessionId);
     if (existing?.client.isAlive()) {
       this.markBusy(existing);
@@ -43,13 +48,23 @@ export class DshSessionPool {
     if (existing) await this.drop(input.sessionId);
 
     const client = this.create(input);
-    client.start();
-    await client.initialize({
-      cwd: input.cwd ?? process.cwd(),
-      provider: input.provider ?? process.env.DSH_PROVIDER ?? 'deepseek-official',
-      model: input.modelId ?? process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8',
-      ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}),
-    });
+    try {
+      client.start();
+      const configuredMax = Number(input.env?.DSH_MAX_TOKENS ?? process.env.DSH_MAX_TOKENS);
+      const maxTokens =
+        input.maxTokens ??
+        (Number.isSafeInteger(configuredMax) && configuredMax > 0 ? configuredMax : undefined);
+      await client.initialize({
+        cwd: input.cwd ?? process.cwd(),
+        provider: input.provider ?? process.env.DSH_PROVIDER ?? 'deepseek-official',
+        model: input.modelId ?? process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8',
+        ...(maxTokens ? { maxTokens } : {}),
+      });
+      throwIfAborted(input.abortSignal);
+    } catch (error) {
+      await client.close().catch(() => {});
+      throw error;
+    }
     const slot: Slot = { client };
     this.slots.set(input.sessionId, slot);
     this.markBusy(slot);

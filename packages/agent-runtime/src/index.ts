@@ -20,7 +20,7 @@ export {
   resolveAgentRuntime,
   resolveDshLaunch,
 } from './dsh-launch.js';
-export { runDshToUIMessageStream } from './dsh-runtime.js';
+export { type DshRuntimeOptions, runDshToUIMessageStream } from './dsh-runtime.js';
 // AIGC START
 export {
   type DshClientFactory,

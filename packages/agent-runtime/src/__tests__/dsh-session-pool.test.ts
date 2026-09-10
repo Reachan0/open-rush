@@ -32,6 +32,19 @@ function fakeClient(): DshPooledClient & { initializeCalls: number; closed: bool
 }
 
 describe('DshSessionPool', () => {
+  it('passes the configured output budget to DSH initialize', async () => {
+    vi.stubEnv('DSH_MAX_TOKENS', '4096');
+    try {
+      const client = fakeClient();
+      const initialize = vi.spyOn(client, 'initialize');
+      const pool = new DshSessionPool(() => client);
+      await pool.acquire(input('budget'));
+      expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 4096 }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('reuses a live client for the same sessionId and initializes once', async () => {
     const created: DshPooledClient[] = [];
     const pool = new DshSessionPool(() => {
@@ -46,6 +59,63 @@ describe('DshSessionPool', () => {
     expect(second).toBe(first);
     expect(created).toHaveLength(1);
     expect((first as ReturnType<typeof fakeClient>).initializeCalls).toBe(1);
+  });
+
+  it('closes a client whose initialization fails and does not retain it', async () => {
+    const failed = fakeClient();
+    failed.initialize = async () => {
+      throw new Error('initialize failed');
+    };
+    const healthy = fakeClient();
+    const clients = [failed, healthy];
+    const pool = new DshSessionPool(() => {
+      const client = clients.shift();
+      if (!client) throw new Error('unexpected client creation');
+      return client;
+    });
+
+    await expect(pool.acquire(input('task-1'))).rejects.toThrow('initialize failed');
+    expect(failed.closed).toBe(true);
+
+    await expect(pool.acquire(input('task-1'))).resolves.toBe(healthy);
+  });
+
+  it('closes and does not retain a client when cancellation occurs during initialization', async () => {
+    let finishInitialize: (() => void) | undefined;
+    const cancelled = fakeClient();
+    cancelled.initialize = async () => {
+      await new Promise<void>((resolve) => {
+        finishInitialize = resolve;
+      });
+    };
+    const healthy = fakeClient();
+    const clients = [cancelled, healthy];
+    const pool = new DshSessionPool(() => {
+      const client = clients.shift();
+      if (!client) throw new Error('unexpected client creation');
+      return client;
+    });
+    const controller = new AbortController();
+    const acquire = pool.acquire({ ...input('task-1'), abortSignal: controller.signal });
+
+    controller.abort();
+    finishInitialize?.();
+
+    await expect(acquire).rejects.toThrow('aborted');
+    expect(cancelled.closed).toBe(true);
+    await expect(pool.acquire(input('task-1'))).resolves.toBe(healthy);
+  });
+
+  it('rejects an acquire already cancelled before creating a client', async () => {
+    const factory = vi.fn(() => fakeClient());
+    const pool = new DshSessionPool(factory);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      pool.acquire({ ...input('task-1'), abortSignal: controller.signal })
+    ).rejects.toThrow('aborted');
+    expect(factory).not.toHaveBeenCalled();
   });
 
   it('starts a new client after the previous process dies', async () => {

@@ -29,13 +29,14 @@ export async function apply(ctx: PluginCtx, config: Config = {}): Promise<void> 
       name: 'tool:ao04_read_status',
       order: config.promptOrder ?? 109,
       text: () =>
-        '已接入 ao04_read_status。读取受保护本地测试状态。控制服务不可用时该工具失败，不要直连依赖或猜测 PID。',
+        '已接入 ao04_read_status。它调用受 AO-04 保护的本地业务服务，当前演示支持项目质量检查。控制服务不可用时该工具失败，不要直连依赖或猜测 PID。',
     });
     process.stderr.write('[ao04_read_status] registered\n');
   } catch (err) {
     process.stderr.write(
-      `[ao04_read_status] apply failed (preset still mounts): ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`
+      `[ao04_read_status] apply failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`
     );
+    throw err;
   }
 }
 // AIGC END

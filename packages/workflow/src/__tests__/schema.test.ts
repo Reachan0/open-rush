@@ -59,6 +59,21 @@ describe('DSL schema and validation (F1)', () => {
     ).toThrow(/duplicate/);
   });
 
+  it.each([
+    { dependsOn: ['self'] },
+    { input: { query: '{{nodes.self.output.query}}' } },
+    { if: '{{nodes.self.output.ready}}' },
+    { foreach: '{{nodes.self.output.items}}' },
+  ])('rejects explicit or inferred self-dependency: %j', (extra) => {
+    expect(() =>
+      validateWorkflowDsl({
+        version: '1',
+        name: 'self-reference',
+        nodes: [{ id: 'self', tool: 'read', input: { file_path: 'test.txt' }, ...extra }],
+      })
+    ).toThrow(/itself|cycle/);
+  });
+
   it('exports a JSON Schema object', () => {
     expect(WORKFLOW_JSON_SCHEMA.required).toContain('nodes');
   });

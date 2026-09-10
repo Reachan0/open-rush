@@ -1,10 +1,11 @@
 // AIGC START
+import { randomUUID } from 'node:crypto';
 import { readActiveLease } from './lease.js';
 
 export const AO04_READ_STATUS_NAME = 'ao04_read_status';
 
 export const AO04_READ_STATUS_DESCRIPTION =
-  '读取本实验受保护的本地测试状态。只传业务参数。不要猜测 PID、管理地址或注入命令。控制服务不可用时本工具失败，不要改去直连依赖。';
+  '调用受 AO-04 保护的本地业务服务。当前演示可根据项目证据执行质量检查并生成交付报告。只传业务参数，不要猜测 PID、管理地址或注入命令。';
 
 export interface WorkflowRunExec {
   signal?: AbortSignal;
@@ -45,6 +46,7 @@ export async function executeReadStatus(
     throw new Error('ao04_read_status unavailable: no active Run lease for this session');
   }
   const url = `${controlBaseUrl(env)}/experiments/${encodeURIComponent(lease.experimentId)}/read_status`;
+  const operationId = exec.callId?.trim() || randomUUID();
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -56,7 +58,7 @@ export async function executeReadStatus(
         'X-AO04-Run-Id': lease.runId,
       },
       body: JSON.stringify({
-        operationId: exec.callId ?? 'op',
+        operationId,
         query: args.query ?? '',
       }),
       signal: exec.signal,
@@ -70,6 +72,27 @@ export async function executeReadStatus(
     throw new Error(`ao04_read_status failed: HTTP ${response.status}`);
   }
   const payload = (await response.json()) as Record<string, unknown>;
+  const current = readActiveLease(sessionId, env.AO04_BIND_DIR, options?.now);
+  if (
+    !current ||
+    current.runId !== lease.runId ||
+    current.experimentId !== lease.experimentId ||
+    current.bindingGeneration !== lease.bindingGeneration
+  ) {
+    throw new Error('ao04_read_status unavailable: Run lease changed during invocation');
+  }
+  exec.signal?.throwIfAborted();
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    payload.operationId !== operationId ||
+    (payload.runId !== undefined && payload.runId !== lease.runId) ||
+    (payload.bindingGeneration !== undefined &&
+      payload.bindingGeneration !== lease.bindingGeneration)
+  ) {
+    throw new Error('ao04_read_status unavailable: response identity mismatch');
+  }
   return {
     text: JSON.stringify({
       ...payload,
@@ -108,7 +131,7 @@ export function ao04ReadStatusToolDefinition<T>(
       query: {
         type: 'string',
         required: true,
-        description: '本地状态查询说明，不要填 runId 或 PID。',
+        description: '传给受保护业务服务的查询或结构化项目证据，不要填 runId 或 PID。',
       },
     },
     output: {

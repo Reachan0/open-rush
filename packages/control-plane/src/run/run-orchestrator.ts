@@ -164,7 +164,27 @@ export class RunOrchestrator {
       });
 
       // 5. Consume SSE stream
-      await this.consumeStream(runId, response, v1EventsEnabled);
+      // AO04 reliability/watch can append events concurrently even while the
+      // v1 extension flag is off. In that mode the stream must use the same
+      // store-assigned seq protocol; otherwise a concurrent reliability event
+      // can claim the stream's next local seq and make the stream event look
+      // like a duplicate.
+      await this.consumeStream(runId, response, v1EventsEnabled || process.env.AO04_DEMO === '1');
+
+      // The stream can finish after a concurrent cancel has transitioned the
+      // run to failed. Do not trust the snapshot loaded before execution:
+      // otherwise this path would publish success and start finalization for
+      // a run that the user has already cancelled.
+      const currentRun = await this.deps.runService.getById(runId);
+      if (!currentRun) {
+        throw new Error(`Run ${runId} not found after stream consumption`);
+      }
+      if (currentRun.status === 'failed') {
+        return;
+      }
+      if (currentRun.status !== 'running') {
+        throw new Error(`Run ${runId} cannot finalize from status '${currentRun.status}'`);
+      }
 
       // 5b. Inject `data-openrush-run-done` {status: 'success'} (v1 only).
       // Gate on `runStartedEmitted` to enforce the "no done-before-started"
@@ -292,11 +312,12 @@ export class RunOrchestrator {
    * Consume the SSE① UIMessageChunk stream from the agent-worker and
    * persist each chunk via the EventStore.
    *
-   * When `v1Enabled` is true (OPENRUSH_V1_EVENTS_ENABLED): uses
-   * {@link EventStore.appendAssignSeq} so seq is assigned atomically by the
-   * DB (single-writer contract, see §7.3). The incoming chunk's `seq`
-   * field carried through the pipeline is **advisory only** for logging;
-   * the authoritative seq is in the EventStore insert result.
+   * When `v1Enabled` is true (OPENRUSH_V1_EVENTS_ENABLED, or AO04 demo
+   * reliability is enabled): uses {@link EventStore.appendAssignSeq} so seq is
+   * assigned atomically by the DB (single-writer contract, see §7.3). The
+   * incoming chunk's `seq` field carried through the pipeline is **advisory
+   * only** for logging; the authoritative seq is in the EventStore insert
+   * result.
    *
    * When false (default): legacy behaviour — an in-process counter assigns
    * seq starting at 0 via `EventStore.append`.
@@ -339,6 +360,7 @@ export class RunOrchestrator {
     const decoder = new TextDecoder();
     let seq = 0;
     let buffer = '';
+    let streamError: string | undefined;
 
     while (reader) {
       const { done, value } = await reader.read();
@@ -353,20 +375,30 @@ export class RunOrchestrator {
         const json = line.slice(6);
         if (json === '[DONE]') continue;
 
+        let data: Record<string, unknown>;
         try {
-          const data = JSON.parse(json);
-          const event = {
-            type: data.type,
-            data,
-            seq: seq++,
-            timestamp: Date.now(),
-          };
-          await pipeline.process(event);
+          data = JSON.parse(json);
         } catch {
-          /* skip malformed */
+          continue;
+        }
+        if (!data || typeof data.type !== 'string') continue;
+        const event = {
+          type: data.type,
+          data,
+          seq: seq++,
+          timestamp: Date.now(),
+        };
+        await pipeline.process(event);
+        if (data.type === 'error') {
+          streamError ??=
+            typeof data.errorText === 'string' ? data.errorText : 'Agent stream failed';
+        }
+        if (data.type === 'finish' && data.finishReason === 'error') {
+          streamError ??= 'Agent stream failed';
         }
       }
     }
+    if (streamError) throw new Error(streamError);
   }
 
   /**

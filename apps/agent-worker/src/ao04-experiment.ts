@@ -6,6 +6,7 @@ export interface EnsureAo04ExperimentInput {
   controlUrl?: string;
   token?: string;
   fetchImpl?: typeof fetch;
+  createIfMissing?: boolean;
 }
 
 export async function ensureAo04Experiment(input: EnsureAo04ExperimentInput): Promise<{
@@ -27,7 +28,7 @@ export async function ensureAo04Experiment(input: EnsureAo04ExperimentInput): Pr
   if (existing.ok) {
     return (await existing.json()) as { experimentId: string; status: string };
   }
-  if (existing.status !== 404) {
+  if (existing.status !== 404 || input.createIfMissing === false) {
     throw new Error(`ao04 experiment lookup failed: HTTP ${existing.status}`);
   }
   const created = await fetchImpl(`${base}/experiments`, {
@@ -59,6 +60,39 @@ export async function ensureAo04Experiment(input: EnsureAo04ExperimentInput): Pr
     experimentId: body.experimentId ?? input.experimentId,
     status: body.status ?? 'ready',
   };
+}
+
+export interface ReleaseAo04ExperimentInput {
+  experimentId: string;
+  controlUrl?: string;
+  token?: string;
+  runId: string;
+  bindingGeneration: number;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+export async function releaseAo04Experiment(input: ReleaseAo04ExperimentInput): Promise<void> {
+  const token = input.token?.trim();
+  if (!token) throw new Error('AO04_CONTROL_TOKEN missing (control service not configured)');
+  const base = (input.controlUrl ?? 'http://127.0.0.1:18080').replace(/\/$/, '');
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const response = await fetchImpl(
+    `${base}/experiments/${encodeURIComponent(input.experimentId)}/release`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-AO04-Token': token,
+        'X-AO04-Run-Id': input.runId,
+        'X-AO04-Binding-Generation': String(input.bindingGeneration),
+      },
+      signal: AbortSignal.timeout(input.timeoutMs ?? 1500),
+    }
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`ao04 release failed: HTTP ${response.status}`);
+  }
 }
 
 export interface CancelAo04ExperimentInput {

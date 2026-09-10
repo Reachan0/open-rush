@@ -56,7 +56,7 @@ export class WorkflowUiMapper {
   private readonly composeIds = new Set<string>();
   private readonly toolNames = new Map<string, string>();
 
-  constructor(messageId = crypto.randomUUID()) {
+  constructor(messageId: string = crypto.randomUUID()) {
     this.messageId = messageId;
   }
 

@@ -106,7 +106,14 @@ export function WorkflowDag({
         }}
       >
         <defs>
-          <linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1">
+          <linearGradient
+            id={gradId}
+            x1="0"
+            x2="0"
+            y1="0"
+            y2={layout.height}
+            gradientUnits="userSpaceOnUse"
+          >
             <stop offset="0%" stopColor="#7c8cff" stopOpacity="0.95" />
             <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.95" />
           </linearGradient>

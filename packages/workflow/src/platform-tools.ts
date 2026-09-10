@@ -7,6 +7,16 @@ import { jsonValue, WorkflowError } from './types.js';
 
 const MAX_CHARS = 24_000;
 const COMPOSE_MATERIALS_MAX = 12_000;
+const DEFAULT_KEENABLE_BASE_URL = 'https://api.keenable.ai';
+
+/** Empty / relative values become the absolute default. fetch('/v1/search') throws. */
+function resolveKeenableBaseUrl(raw?: string): string {
+  const trimmed = String(raw ?? '')
+    .trim()
+    .replace(/\/$/, '');
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return DEFAULT_KEENABLE_BASE_URL;
+}
 
 function htmlToText(raw: string): string {
   const looksHtml = /<\/?[a-z][\s\S]*>/i.test(raw) || /<!doctype/i.test(raw);
@@ -322,11 +332,9 @@ export function createPlatformToolInvoker(options: {
         if (!Number.isFinite(limit)) limit = 5;
         limit = Math.min(10, Math.max(1, Math.round(limit)));
 
-        const base = (
-          options.keenable?.baseUrl ??
-          process.env.KEENABLE_API_URL ??
-          'https://api.keenable.ai'
-        ).replace(/\/$/, '');
+        const base = resolveKeenableBaseUrl(
+          options.keenable?.baseUrl || process.env.KEENABLE_BASE_URL || process.env.KEENABLE_API_URL
+        );
         const apiKey = (options.keenable?.apiKey ?? process.env.KEENABLE_API_KEY ?? '').trim();
         const title = (
           options.keenable?.appTitle ??
@@ -460,43 +468,67 @@ export function createPlatformToolInvoker(options: {
         return jsonValue(await searchWorkspaceText(options.root, query));
       },
     },
-    {
-      name: 'text.compose',
-      description:
-        'Write the final assistant chat reply from gathered tool outputs. Input { intent?, parts }. Same tone as a normal OpenRush / Deepseek Harness message; not a standalone markdown article.',
-      execute: async (args) => {
-        const intent = String(
-          options.userIntent ?? args.intent ?? args.question ?? args.prompt ?? ''
-        ).trim();
-        const materials = formatComposePart(args.parts).join('\n').trim();
-        if (!options.complete) return materials;
-        const clipped =
-          materials.length > COMPOSE_MATERIALS_MAX
-            ? `${materials.slice(0, COMPOSE_MATERIALS_MAX)}\n…[truncated]`
-            : materials;
-        try {
-          const written = await options.complete(
-            [
-              '你是 OpenRush 聊天里的助手，回复风格与 Deepseek Harness 一致。',
-              '下面是用户问题和工具已经查到的材料。请直接回答用户，不要写成独立的 Markdown 文档、攻略或摘要标题。',
-              '可以用短段落、列表和加粗（聊天里常见排版）；不要使用一级标题（# ），不要写「以下是一篇…」「作为编辑…」这类套话。',
-              '只根据材料里的事实，不要编造。材料里出现的 path / 文件路径必须原样写进回复，不要改成别的文件。不要复述 HTML / JSON / 原始标签。只输出给用户看的回复正文，不要包 JSON。',
-              intent ? `用户问题：\n${intent}` : '',
-              '',
-              '材料：',
-              clipped,
-            ]
-              .filter(Boolean)
-              .join('\n')
-          );
-          const text = unwrapBrief(written);
-          return text.length > 0 ? text : materials;
-        } catch {
-          return materials;
-        }
-      },
-    },
+    composeRegisteredTool(options),
   ];
   return createToolInvoker(tools);
+}
+
+/** Fast-lane local helper. Merge into a Loop invoker; do not register on ctx.tools. */
+export function createComposeToolInvoker(options: {
+  complete?: LlmComplete;
+  userIntent?: string;
+}): ReturnType<typeof createToolInvoker> {
+  return createToolInvoker([composeRegisteredTool(options)]);
+}
+
+function composeRegisteredTool(options: {
+  complete?: LlmComplete;
+  userIntent?: string;
+}): RegisteredTool {
+  return {
+    name: 'text.compose',
+    description:
+      'Write the final assistant chat reply from gathered tool outputs. Input { intent?, parts }. Same tone as a normal OpenRush / Deepseek Harness message; not a standalone markdown article.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intent: { type: 'string' },
+        parts: {},
+      },
+    },
+    execute: async (args, signal) => {
+      const intent = String(
+        options.userIntent ?? args.intent ?? args.question ?? args.prompt ?? ''
+      ).trim();
+      const materials = formatComposePart(args.parts).join('\n').trim();
+      if (!options.complete) return materials;
+      const clipped =
+        materials.length > COMPOSE_MATERIALS_MAX
+          ? `${materials.slice(0, COMPOSE_MATERIALS_MAX)}\n…[truncated]`
+          : materials;
+      try {
+        const written = await options.complete(
+          [
+            '你是 OpenRush 聊天里的助手，回复风格与 Deepseek Harness 一致。',
+            '下面是用户问题和工具已经查到的材料。请直接回答用户，不要写成独立的 Markdown 文档、攻略或摘要标题。',
+            '可以用短段落、列表和加粗（聊天里常见排版）；不要使用一级标题（# ），不要写「以下是一篇…」「作为编辑…」这类套话。',
+            '只根据材料里的事实，不要编造。温度、风力、降水、时间、距离等数字必须写进回复，不要省略成「天气不错」。材料里出现的 path / 文件路径必须原样写进回复，不要改成别的文件。不要复述 HTML / JSON / 原始标签。只输出给用户看的回复正文，不要包 JSON。',
+            intent ? `用户问题：\n${intent}` : '',
+            '',
+            '材料：',
+            clipped,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          { purpose: 'compose', signal }
+        );
+        const text = unwrapBrief(written);
+        return text.length > 0 ? text : materials;
+      } catch {
+        signal?.throwIfAborted();
+        return materials;
+      }
+    },
+  };
 }
 // AIGC END

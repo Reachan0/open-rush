@@ -42,6 +42,15 @@ export interface NodeResult {
   iterations?: number;
 }
 
+export interface WorkflowErrorOptions {
+  /** Marks an item failure that must fail its whole graph node. */
+  fatal?: boolean;
+  /** Structured evidence that should survive workflow-run formatting. */
+  details?: JsonValue;
+  /** Partial foreach output that must remain attached to the failed node. */
+  partialOutput?: JsonValue;
+}
+
 export interface WorkflowGuards {
   maxSteps: number;
   maxLoop: number;
@@ -57,12 +66,26 @@ export const DEFAULT_GUARDS: WorkflowGuards = {
 export class WorkflowError extends Error {
   readonly code: string;
   readonly nodeId?: string;
+  readonly nodes?: NodeResult[];
+  readonly fatal: boolean;
+  readonly details?: JsonValue;
+  readonly partialOutput?: JsonValue;
 
-  constructor(code: string, message: string, nodeId?: string) {
+  constructor(
+    code: string,
+    message: string,
+    nodeId?: string,
+    nodes?: NodeResult[],
+    options?: WorkflowErrorOptions
+  ) {
     super(message);
     this.name = 'WorkflowError';
     this.code = code;
     this.nodeId = nodeId;
+    this.nodes = nodes;
+    this.fatal = options?.fatal ?? false;
+    this.details = options?.details;
+    this.partialOutput = options?.partialOutput;
   }
 }
 
@@ -121,6 +144,7 @@ export interface WorkflowRunDegraded {
   error: string;
   dsl?: WorkflowDsl;
   nodes?: NodeResult[];
+  details?: JsonValue;
   output: JsonValue | undefined;
   events: WorkflowEvent[];
   rounds: number;
@@ -136,6 +160,7 @@ export interface WorkflowRunFailure {
   error: string;
   dsl?: WorkflowDsl;
   nodes?: NodeResult[];
+  details?: JsonValue;
   events: WorkflowEvent[];
   rounds: number;
   durationMs: number;

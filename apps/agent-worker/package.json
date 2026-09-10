@@ -8,8 +8,10 @@
     "dev": "tsx watch --env-file-if-exists=.env.local src/server.ts",
     "start": "node dist/server.js",
     "check": "tsc --noEmit",
+    "precheck": "turbo run build --filter=@open-rush/agent-worker^...",
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
+    "pretest": "turbo run build --filter=@open-rush/agent-worker^...",
     "clean": "rm -rf dist node_modules coverage"
   },
   "dependencies": {

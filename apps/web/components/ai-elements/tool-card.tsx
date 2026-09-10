@@ -15,7 +15,6 @@ import {
   XCircleIcon,
 } from 'lucide-react';
 import { memo, useCallback, useState } from 'react';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { CodeBlock } from './inline-code-block';
 
@@ -80,10 +79,10 @@ function getStatusBadge(state: ToolState) {
 
   const { icon, label } = config[state];
   return (
-    <Badge variant="secondary" className="gap-1 rounded-full text-xs text-muted-foreground">
+    <span className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground">
       {icon}
       {label}
-    </Badge>
+    </span>
   );
 }
 
@@ -148,25 +147,25 @@ export function ToolCard({ toolName, state, args, result }: ToolCardProps) {
   const inputStr = args ? (typeof args === 'string' ? args : JSON.stringify(args, null, 2)) : null;
 
   return (
-    <div className="my-2 w-full rounded-md border overflow-hidden">
+    <div className="my-3 w-full overflow-hidden">
       <button
         type="button"
         onClick={toggle}
-        className="flex w-full items-center gap-2 p-2 hover:bg-secondary/50 transition-colors cursor-pointer"
+        className="flex w-full cursor-pointer items-center gap-2 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         {getToolIcon(toolName)}
+        <span className="truncate">{toolName}</span>
         {getStatusBadge(state)}
-        <span className="text-xs font-medium text-muted-foreground">{toolName}</span>
         <ChevronDownIcon
           className={cn(
-            'ml-auto size-4 text-muted-foreground transition-transform',
+            'size-4 text-muted-foreground transition-transform',
             expanded && 'rotate-180'
           )}
         />
       </button>
 
       {expanded && (
-        <div className="space-y-1 px-1 pb-1">
+        <div className="ml-2 mt-2 space-y-2 border-l border-border/60 pl-4">
           {inputStr && (
             <div className="overflow-hidden rounded-md">
               <CodeBlock code={inputStr} language={typeof args === 'string' ? 'text' : 'json'} />

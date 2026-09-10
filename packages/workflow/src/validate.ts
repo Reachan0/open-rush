@@ -105,7 +105,6 @@ export function validateWorkflowDsl(input: unknown, options: ValidateOptions = {
       collectNodeRefs(node.input, deps);
       collectNodeRefs(node.if, deps);
       collectNodeRefs(node.foreach, deps);
-      deps.delete(node.id);
       const dependsOn = [...deps];
       return dependsOn.length > 0 ? { ...node, dependsOn } : { ...node, dependsOn: undefined };
     }),

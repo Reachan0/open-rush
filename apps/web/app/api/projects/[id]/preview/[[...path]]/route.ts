@@ -38,7 +38,9 @@ export async function GET(
 
   try {
     const file = readWorkspacePreviewBytes(projectRoot, relPath);
-    return new Response(file.body, {
+    const body = new Uint8Array(new ArrayBuffer(file.body.byteLength));
+    body.set(file.body);
+    return new Response(body, {
       status: 200,
       headers: {
         'Content-Type': file.contentType,

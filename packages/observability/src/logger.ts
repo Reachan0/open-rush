@@ -54,7 +54,7 @@ export function createLogger(opts: CreateLoggerOptions): Logger {
       if (ctx.sandboxId) fields.sandboxId = ctx.sandboxId;
       return fields;
     },
-    ...(isDev
+    ...(isDev && process.env.LOG_PRETTY !== 'false'
       ? {
           transport: {
             target: 'pino-pretty',

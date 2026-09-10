@@ -9,6 +9,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+type AbortAgentSessionInput = {
+  sessionId: string;
+  runId?: string;
+  fetchImpl?: typeof fetch;
+  workerUrl?: string;
+};
+
 const {
   mockAuthenticate,
   mockHasScope,
@@ -61,7 +68,9 @@ const {
     mockVerifyProjectAccess: vi.fn(),
     mockGetById: vi.fn(),
     mockCancelRun: vi.fn(),
-    mockAbortAgentSession: vi.fn(async () => undefined),
+    mockAbortAgentSession: vi.fn<(input: AbortAgentSessionInput) => Promise<void>>(
+      async () => undefined
+    ),
     dbFake: {
       __select: selectSpy,
       select: (...projArgs: unknown[]) => makeSelectChain(projArgs),
@@ -82,7 +91,7 @@ vi.mock('@/lib/api-utils', () => ({
 }));
 
 vi.mock('@/lib/abort-agent-session', () => ({
-  abortAgentSession: (...args: unknown[]) => mockAbortAgentSession(...args),
+  abortAgentSession: (input: AbortAgentSessionInput) => mockAbortAgentSession(input),
 }));
 
 vi.mock('@open-rush/control-plane', () => ({

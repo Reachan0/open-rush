@@ -36,7 +36,11 @@ import {
   shouldAbortSession,
   unbindSessionRun,
 } from './ao04-bind.js';
-import { cancelAo04Experiment, ensureAo04Experiment } from './ao04-experiment.js';
+import {
+  cancelAo04Experiment,
+  ensureAo04Experiment,
+  releaseAo04Experiment,
+} from './ao04-experiment.js';
 import { resolveWorkflowWorkspace, tryConnectCodingTools } from './coding-mcp.js';
 import { WORKFLOW_LIVE_HTML } from './workflow-live-page.js';
 import { workflowRunToSseResponse } from './workflow-ui-stream.js';
@@ -49,15 +53,15 @@ const activeSessions = new Map<string, { controller: AbortController; runId: str
 // AIGC END
 
 // AIGC START
-function withStreamCleanup(response: Response, onDone: () => void): Response {
+function withStreamCleanup(response: Response, onDone: () => void | Promise<void>): Response {
   if (!response.body) {
-    onDone();
+    void onDone();
     return response;
   }
   const body = response.body.pipeThrough(
     new TransformStream({
-      flush() {
-        onDone();
+      async flush() {
+        await onDone();
       },
     })
   );
@@ -165,26 +169,51 @@ app.post('/prompt', async (c) => {
   const promptRunId = String(env?.OPENRUSH_RUN_ID ?? sid);
   // AIGC END
 
-  const releaseAo04 = () => {
-    const rec = activeSessions.get(sid);
-    if (rec?.controller === abortController) {
-      activeSessions.delete(sid);
-    }
-    if (ao04Lease) {
-      unbindSessionRun(ao04Lease.sessionId, ao04Lease.bindingGeneration, ao04BindDir);
-    }
+  let ao04Release: Promise<void> | undefined;
+  const releaseAo04 = (): Promise<void> => {
+    ao04Release ??= (async () => {
+      const rec = activeSessions.get(sid);
+      if (rec?.controller === abortController) {
+        activeSessions.delete(sid);
+      }
+      const lease = ao04Lease;
+      if (!lease) return;
+      try {
+        if (process.env.AO04_DEMO === '1') {
+          await releaseAo04Experiment({
+            experimentId: lease.experimentId,
+            controlUrl: process.env.AO04_CONTROL_URL,
+            token: process.env.AO04_CONTROL_TOKEN,
+            runId: lease.runId,
+            bindingGeneration: lease.bindingGeneration,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `[AO04] release control service failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      } finally {
+        unbindSessionRun(lease.sessionId, lease.bindingGeneration, ao04BindDir);
+        ao04Lease = undefined;
+      }
+    })();
+    return ao04Release;
   };
 
   // AIGC START
   if (process.env.AO04_DEMO === '1') {
     try {
       const runId = promptRunId;
-      const experimentId = env?.AO04_EXPERIMENT_ID ?? `ao04-${runId}`;
+      const experimentId =
+        process.env.AO04_SERVICE_DEMO === '1'
+          ? 'ao04-demo-local'
+          : (env?.AO04_EXPERIMENT_ID ?? `ao04-${runId}`);
       await ensureAo04Experiment({
         experimentId,
         mode: env?.AO04_MODE ?? 'auto',
         controlUrl: process.env.AO04_CONTROL_URL ?? env?.AO04_CONTROL_URL,
         token: process.env.AO04_CONTROL_TOKEN ?? env?.AO04_CONTROL_TOKEN,
+        createIfMissing: process.env.AO04_SERVICE_DEMO !== '1',
       });
       ao04Lease = bindSessionRun({
         bindDir: ao04BindDir,
@@ -208,7 +237,7 @@ app.post('/prompt', async (c) => {
     try {
       validateProjectId(projectId);
     } catch (err: unknown) {
-      releaseAo04();
+      await releaseAo04();
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 400);
     }
@@ -273,7 +302,10 @@ app.post('/prompt', async (c) => {
     };
 
     // AIGC START
-    const workspaceCwd = projectPath ?? process.cwd();
+    const workspaceCwd =
+      process.env.AO04_SERVICE_DEMO === '1'
+        ? (process.env.WORKSPACE_PATH ?? projectPath ?? process.cwd())
+        : (projectPath ?? process.cwd());
     const complete = llmCompleteFromEnv();
 
     const laneIntent = routingIntent(userPrompt);
@@ -344,7 +376,7 @@ app.post('/prompt', async (c) => {
 
     return response;
   } catch (err: unknown) {
-    releaseAo04();
+    await releaseAo04();
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ error: message }, 500);
   }

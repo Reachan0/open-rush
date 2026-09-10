@@ -87,6 +87,32 @@ describe('engine expression coverage (B5)', () => {
     expect(result.output).toMatchObject({ path: 'src/router.ts', content: 'ok' });
   });
 
+  it('inherits a file path for the DSH native read tool', async () => {
+    const tools = createToolInvoker([
+      {
+        name: 'grep',
+        description: 'search',
+        execute: () => ({ path: 'src/router.ts', matches: [] }),
+      },
+      {
+        name: 'read',
+        description: 'read',
+        execute: (args) => ({ path: String(args.path), lines: [{ number: 1, text: 'ok' }] }),
+      },
+    ]);
+    const result = await executeWorkflow(
+      {
+        version: '1',
+        nodes: [
+          { id: 'search', tool: 'grep', input: { pattern: 'chooseLane' } },
+          { id: 'doc', tool: 'read', dependsOn: ['search'] },
+        ],
+      },
+      { tools }
+    );
+    expect(result.output).toMatchObject({ path: 'src/router.ts' });
+  });
+
   it('runs independent nodes in one wave (parallel)', async () => {
     let inflight = 0;
     let maxInflight = 0;
@@ -290,6 +316,115 @@ describe('engine expression coverage (B5)', () => {
       { url: 'https://ok.example/c', status: 200, content: 'ok' },
     ]);
   });
+
+  it('fails a foreach node on a fatal item while retaining partial output and blocking dependents', async () => {
+    let downstreamCalls = 0;
+    const tools = createToolInvoker([
+      {
+        name: 'list.make',
+        description: 'protected inputs',
+        execute: () => ['ok', 'degraded'],
+      },
+      {
+        name: 'ao04_read_status',
+        description: 'protected status',
+        execute: (args) => {
+          if (args.value === 'degraded') {
+            throw new WorkflowError(
+              'protected_tool_failed',
+              'status degraded',
+              undefined,
+              undefined,
+              {
+                fatal: true,
+                details: { status: 'degraded', evidenceRefs: ['incident-1'] },
+              }
+            );
+          }
+          return { status: 'ok', data: { ready: true } };
+        },
+      },
+      {
+        name: 'downstream',
+        description: 'must not run',
+        execute: () => {
+          downstreamCalls += 1;
+          return 'should not run';
+        },
+      },
+    ]);
+
+    await expect(
+      executeWorkflow(
+        {
+          version: '1',
+          nodes: [
+            { id: 'seed', tool: 'list.make' },
+            {
+              id: 'protected',
+              tool: 'ao04_read_status',
+              foreach: '{{nodes.seed.output}}',
+              input: { value: '{{item}}' },
+              dependsOn: ['seed'],
+            },
+            { id: 'after', tool: 'downstream', dependsOn: ['protected'] },
+          ],
+        },
+        { tools }
+      )
+    ).rejects.toMatchObject({
+      code: 'protected_tool_failed',
+      fatal: true,
+      nodeId: 'protected',
+    });
+
+    expect(downstreamCalls).toBe(0);
+    const events: Array<{ eventType: string; payload: unknown }> = [];
+    try {
+      await executeWorkflow(
+        {
+          version: '1',
+          nodes: [
+            { id: 'seed', tool: 'list.make' },
+            {
+              id: 'protected',
+              tool: 'ao04_read_status',
+              foreach: '{{nodes.seed.output}}',
+              input: { value: '{{item}}' },
+              dependsOn: ['seed'],
+            },
+            { id: 'after', tool: 'downstream', dependsOn: ['protected'] },
+          ],
+        },
+        {
+          tools,
+          sink: {
+            emit: (event) => {
+              events.push(event);
+            },
+          },
+        }
+      );
+    } catch (err) {
+      const error = err as WorkflowError;
+      const protectedNode = error.nodes?.find((node) => node.id === 'protected');
+      expect(protectedNode?.status).toBe('failed');
+      expect(protectedNode?.output).toEqual([
+        { status: 'ok', data: { ready: true } },
+        { skipped: true, error: 'status degraded' },
+      ]);
+      expect(error.details).toMatchObject({ status: 'degraded' });
+      expect(error.nodes?.find((node) => node.id === 'after')?.status).toBe('skipped');
+      expect(events).toContainEqual({
+        eventType: 'workflow-node-end',
+        payload: expect.objectContaining({
+          nodeId: 'after',
+          status: 'skipped',
+          reason: 'upstream_failed',
+        }),
+      });
+    }
+  });
 });
 
 describe('guards and failure isolation (B6)', () => {
@@ -343,6 +478,44 @@ describe('guards and failure isolation (B6)', () => {
       );
     } catch (err) {
       expect(err).toMatchObject({ code: 'guard_timeout', nodeId: 'slowNode' });
+    }
+  });
+
+  it('keeps completed sibling nodes on the error when one parallel node fails', async () => {
+    const tools = createToolInvoker([
+      {
+        name: 'ok',
+        description: 'ok',
+        execute: (args) => ({ url: args.url as string, body: 'ok' }),
+      },
+      {
+        name: 'boom',
+        description: 'fail',
+        execute: () => {
+          throw new Error('fetch timeout');
+        },
+      },
+    ]);
+    try {
+      await executeWorkflow(
+        {
+          version: '1',
+          name: 'three_pages',
+          nodes: [
+            { id: 'a', tool: 'ok', input: { url: 'https://a.example' } },
+            { id: 'b', tool: 'ok', input: { url: 'https://b.example' } },
+            { id: 'c', tool: 'boom', input: { url: 'https://c.example' } },
+          ],
+        },
+        { tools }
+      );
+      throw new Error('expected failure');
+    } catch (err) {
+      expect(err).toBeInstanceOf(WorkflowError);
+      const nodes = (err as WorkflowError).nodes ?? [];
+      expect(nodes.filter((node) => node.status === 'completed')).toHaveLength(2);
+      expect(nodes.find((node) => node.id === 'c')?.status).toBe('failed');
+      expect(nodes.find((node) => node.id === 'c')?.error).toMatch(/timeout/);
     }
   });
 });

@@ -4,7 +4,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { bindSessionRun, shouldAbortSession, unbindSessionRun } from '../ao04-bind.js';
+import {
+  bindSessionRun,
+  getSessionLease,
+  shouldAbortSession,
+  unbindSessionRun,
+} from '../ao04-bind.js';
 
 describe('ao04 session bind', () => {
   it('rejects a second parallel run on the same session', () => {
@@ -48,6 +53,20 @@ describe('ao04 session bind', () => {
     expect(second.bindingGeneration).toBe(2);
     expect(second.runId).toBe('r2');
     expect(unbindSessionRun('s3', first.bindingGeneration, dir)).toBe(false);
+  });
+
+  it('does not expose a tombstoned lease as active', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ao04-bind-'));
+    const lease = bindSessionRun({
+      bindDir: dir,
+      sessionId: 's4',
+      runId: 'r1',
+      experimentId: 'e1',
+      now: 1000,
+    });
+    expect(getSessionLease('s4', 1000)).toEqual(lease);
+    expect(unbindSessionRun('s4', lease.bindingGeneration, dir)).toBe(true);
+    expect(getSessionLease('s4', 1001)).toBeUndefined();
   });
 
   it('does not abort a newer run when the requested runId is stale', () => {

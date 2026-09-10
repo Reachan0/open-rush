@@ -117,6 +117,36 @@ describe('createPlatformToolInvoker', () => {
     expect(headers.get('X-Keenable-Title')).toBe('OpenRush');
   });
 
+  it('relative /v1/search would explode in fetch; web.search must stay absolute', async () => {
+    await expect(fetch('/v1/search')).rejects.toThrow(/Failed to parse URL/);
+    const calls: Array<{ url: string }> = [];
+    const tools = createPlatformToolInvoker({
+      root: tmpdir(),
+      keenable: { apiKey: 'keen_test', baseUrl: '/v1/search' },
+      fetchImpl: async (url) => {
+        calls.push({ url: String(url) });
+        return Response.json({ query: 'q', results: [] });
+      },
+    });
+    await tools.invoke('web.search', { query: '西湖跑步' });
+    expect(calls[0]?.url).toBe('https://api.keenable.ai/v1/search');
+    expect(calls[0]?.url).not.toBe('/v1/search');
+  });
+
+  it('empty keenable baseUrl still fetches an absolute search URL', async () => {
+    const calls: Array<{ url: string }> = [];
+    const tools = createPlatformToolInvoker({
+      root: tmpdir(),
+      keenable: { apiKey: 'keen_test', baseUrl: '' },
+      fetchImpl: async (url) => {
+        calls.push({ url: String(url) });
+        return Response.json({ query: 'q', results: [] });
+      },
+    });
+    await tools.invoke('web.search', { query: 'q' });
+    expect(calls[0]?.url).toBe('https://api.keenable.ai/v1/search');
+  });
+
   it('rejects an empty search query and surfaces Keenable HTTP errors', async () => {
     const tools = createPlatformToolInvoker({
       root: tmpdir(),
@@ -181,10 +211,13 @@ describe('createPlatformToolInvoker', () => {
   });
 
   it('uses the injected complete() to write a chat reply instead of dumping materials', async () => {
+    const abort = new AbortController();
     const tools = createPlatformToolInvoker({
       root: tmpdir(),
       userIntent: '这个站点是干什么的？',
-      complete: async (prompt) => {
+      complete: async (prompt, options) => {
+        expect(options?.purpose).toBe('compose');
+        expect(options?.signal).toBe(abort.signal);
         expect(prompt).toContain('Example Domain');
         expect(prompt).toContain('用户问题');
         expect(prompt).toContain('这个站点是干什么的？');
@@ -194,14 +227,18 @@ describe('createPlatformToolInvoker', () => {
         return '这个站点只用来做文档示例。';
       },
     });
-    const out = await tools.invoke('text.compose', {
-      title: '摘要',
-      parts: {
-        url: 'https://example.com',
-        content:
-          '<!doctype html><h1>Example Domain</h1><p>This domain is for use in documentation examples.</p>',
+    const out = await tools.invoke(
+      'text.compose',
+      {
+        title: '摘要',
+        parts: {
+          url: 'https://example.com',
+          content:
+            '<!doctype html><h1>Example Domain</h1><p>This domain is for use in documentation examples.</p>',
+        },
       },
-    });
+      abort.signal
+    );
     expect(out).toBe('这个站点只用来做文档示例。');
   });
 

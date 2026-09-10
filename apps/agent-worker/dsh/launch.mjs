@@ -7,7 +7,9 @@ import { pathToFileURL } from 'node:url';
 const NAME = 'dsh-jsonrpc-agent';
 const repoRoot = process.env.DSH_ROOT;
 if (!repoRoot) {
-  process.stderr.write(`${NAME}: DSH_ROOT is required so plugins resolve from the harness checkout\n`);
+  process.stderr.write(
+    `${NAME}: DSH_ROOT is required so plugins resolve from the harness checkout\n`
+  );
   process.exit(1);
 }
 
@@ -21,7 +23,11 @@ loadEnv(NAME);
 const fromEnv = process.env.DSH_CORDIS_CONFIG;
 const fromArgv = process.argv[2];
 const requested =
-  fromEnv !== undefined && fromEnv !== '' ? fromEnv : fromArgv !== undefined && fromArgv !== '' ? fromArgv : undefined;
+  fromEnv !== undefined && fromEnv !== ''
+    ? fromEnv
+    : fromArgv !== undefined && fromArgv !== ''
+      ? fromArgv
+      : undefined;
 const configPath = requested === undefined ? undefined : resolveConfigPath(requested, undefined);
 if (configPath === undefined || !existsSync(configPath)) {
   process.stderr.write(

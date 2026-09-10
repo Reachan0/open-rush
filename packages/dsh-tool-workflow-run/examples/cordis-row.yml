@@ -1,0 +1,12 @@
+# AIGC START
+# One row to mount the fast-lane plugin in any DSH composition / user preset.
+# Point `name` at this package's built entry (absolute path works; DSH converts
+# it to a file: URL). Do not change DeepSeek Harness source.
+#
+# - id: tool-workflow-run
+#   name: /absolute/path/to/open-rush/packages/dsh-tool-workflow-run/dist/index.js
+#
+# Official DSH agent presets are a full agent plane. Adding only this row to a
+# copied user preset keeps bash/read/web from the copy; adding it alone as a
+# new preset would replace the standard tool set.
+# AIGC END

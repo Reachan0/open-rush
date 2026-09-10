@@ -1,7 +1,6 @@
 // @ts-nocheck
 'use client';
 
-import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import type { DynamicToolUIPart, ToolUIPart } from 'ai';
@@ -14,7 +13,7 @@ import {
   XCircleIcon,
 } from 'lucide-react';
 import type { ComponentProps, ReactNode } from 'react';
-import { isValidElement, useEffect, useRef, useState } from 'react';
+import { isValidElement, useState } from 'react';
 
 import { CodeBlock } from './code-block';
 
@@ -22,7 +21,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
-    className={cn('group not-prose mb-4 w-full rounded-md border', className)}
+    className={cn('group not-prose mb-3 w-full', className)}
     {...props}
   />
 );
@@ -45,29 +44,21 @@ export type ToolHeaderProps = {
 export const isToolRunning = (state: ToolPart['state'] | undefined): boolean =>
   state === 'input-available' || state === 'input-streaming' || state === 'approval-requested';
 
-/** Controlled open state: auto-expand while running, never mutate defaultOpen. */
-export function useToolOpen(state: ToolPart['state'] | undefined) {
-  const running = isToolRunning(state);
-  const [open, setOpen] = useState(running);
-  const prevRunning = useRef(running);
-  useEffect(() => {
-    if (running && !prevRunning.current) {
-      setOpen(true);
-    }
-    prevRunning.current = running;
-  }, [running]);
+/** Keep tool details compact until the user asks to inspect them. */
+export function useToolOpen(_state: ToolPart['state'] | undefined) {
+  const [open, setOpen] = useState(false);
   return { open, onOpenChange: setOpen };
 }
 // AIGC END
 
 const statusLabels: Record<ToolPart['state'], string> = {
-  'approval-requested': 'Awaiting Approval',
-  'approval-responded': 'Responded',
-  'input-available': 'Running',
-  'input-streaming': 'Pending',
-  'output-available': 'Completed',
-  'output-denied': 'Denied',
-  'output-error': 'Error',
+  'approval-requested': '等待确认',
+  'approval-responded': '已确认',
+  'input-available': '执行中',
+  'input-streaming': '准备中',
+  'output-available': '已完成',
+  'output-denied': '已拒绝',
+  'output-error': '失败',
 };
 
 const statusIcons: Record<ToolPart['state'], ReactNode> = {
@@ -81,10 +72,10 @@ const statusIcons: Record<ToolPart['state'], ReactNode> = {
 };
 
 export const getStatusBadge = (status: ToolPart['state']) => (
-  <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
+  <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
     {statusIcons[status]}
     {statusLabels[status]}
-  </Badge>
+  </span>
 );
 
 export const ToolHeader = ({
@@ -99,15 +90,18 @@ export const ToolHeader = ({
 
   return (
     <CollapsibleTrigger
-      className={cn('flex w-full items-center justify-between gap-4 p-3', className)}
+      className={cn(
+        'flex w-full items-center gap-2 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground',
+        className
+      )}
       {...props}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <WrenchIcon className="size-4 text-muted-foreground" />
-        <span className="font-medium text-sm">{title ?? derivedName}</span>
-        {getStatusBadge(state)}
+        <span className="truncate">{title ?? derivedName}</span>
       </div>
-      <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+      {getStatusBadge(state)}
+      <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
     </CollapsibleTrigger>
   );
 };
@@ -117,7 +111,7 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 p-4 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in',
+      'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 ml-2 mt-2 space-y-4 border-l border-border/60 pl-4 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in',
       className
     )}
     {...props}

@@ -51,6 +51,7 @@ export class DshEventMapper {
   private reasoningId: string | null = null;
   private streamedAssistant = false;
   private readonly seenToolCalls = new Set<string>();
+  private readonly finishedToolCalls = new Set<string>();
   private readonly toolNames = new Map<string, string>();
 
   constructor(messageId: string = crypto.randomUUID()) {
@@ -76,7 +77,18 @@ export class DshEventMapper {
   }
 
   error(errorText: string): UIMessageChunk[] {
-    return [...this.closeOpenParts(), { type: 'error', errorText }, ...this.finish('error')];
+    const failed = [...this.seenToolCalls]
+      .filter((id) => !this.finishedToolCalls.has(id))
+      .map((toolCallId) => {
+        this.finishedToolCalls.add(toolCallId);
+        return { type: 'tool-output-error', toolCallId, errorText };
+      });
+    return [
+      ...this.closeOpenParts(),
+      ...failed,
+      { type: 'error', errorText },
+      ...this.finish('error'),
+    ];
   }
 
   private pushEvent(event: Record<string, unknown>): UIMessageChunk[] {
@@ -198,6 +210,7 @@ export class DshEventMapper {
     const toolCallId =
       asString(source.callId) ?? asString(data.callId) ?? this.inferToolCallId(message);
     const { output, isError } = extractToolOutput(data);
+    this.finishedToolCalls.add(toolCallId);
     if (isError) {
       return [{ type: 'tool-output-error', toolCallId, errorText: output || 'tool error' }];
     }

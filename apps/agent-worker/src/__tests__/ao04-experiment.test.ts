@@ -42,9 +42,25 @@ describe('ensureAo04Experiment', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('posts release with run and generation headers', async () => {
+    const { releaseAo04Experiment } = await import('../ao04-experiment.js');
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
+    await releaseAo04Experiment({
+      experimentId: 'exp-release',
+      token: 'secret',
+      runId: 'run-release',
+      bindingGeneration: 4,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const [, init] = fetchImpl.mock.calls[0];
+    const headers = init?.headers as Record<string, string>;
+    expect(headers['X-AO04-Run-Id']).toBe('run-release');
+    expect(headers['X-AO04-Binding-Generation']).toBe('4');
+  });
+
   it('posts cancel with run and generation headers', async () => {
     const { cancelAo04Experiment } = await import('../ao04-experiment.js');
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify({ status: 'cancelled' }), { status: 200 })
     );
     await cancelAo04Experiment({
@@ -55,8 +71,8 @@ describe('ensureAo04Experiment', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    const headers = init.headers as Record<string, string>;
+    const [, init] = fetchImpl.mock.calls[0];
+    const headers = init?.headers as Record<string, string>;
     expect(headers['X-AO04-Run-Id']).toBe('run-9');
     expect(headers['X-AO04-Binding-Generation']).toBe('2');
   });

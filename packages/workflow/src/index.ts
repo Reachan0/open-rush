@@ -1,4 +1,10 @@
 // AIGC START
+
+export {
+  extractAmapLocation,
+  flattenAmapToolResult,
+  normalizeAmapInvokeArgs,
+} from './amap-flatten.js';
 export {
   chatCompletionsConfigured,
   completeWithChatCompletions,
@@ -25,17 +31,41 @@ export {
   buildGeneratePrompt,
   catalogHasAmap,
   catalogHasCoding,
+  catalogHasDshRead,
+  catalogHasKeenableSearch,
+  catalogHasWebFetch,
   extractJson,
   type GenerateResult,
   generateWorkflowDsl,
   type LlmComplete,
   looksLikeTravelIntent,
+  looksLikeWorkspaceInspect,
 } from './generate.js';
 export { type WorkflowGraph, type WorkflowGraphNode, workflowGraph } from './graph.js';
 export { evalCondition, interpolateString, interpolateValue, lookup } from './interpolate.js';
 export { runTravelAgentLoop } from './loop-simulator.js';
+export type { LoopToolResultAdapter } from './loop-tools.js';
+export {
+  createLoopToolInvoker,
+  deniedLoopTools,
+  eligibleLoopTools,
+  flattenLoopExecuteResult,
+  flattenLoopToolValue,
+  formatDeniedLoopToolList,
+  formatEligibleLoopToolList,
+  isDeniedLoopTool,
+  isEligibleLoopTool,
+  LOOP_TOOL_DENYLIST,
+  LOOP_TOOL_POLICY,
+  type LoopExecuteInput,
+  type LoopExecuteResult,
+  type LoopToolSchema,
+  type LoopToolsLike,
+  loopToolDenyReason,
+  schemasToToolDescriptors,
+} from './loop-tools.js';
 export { workflowToMermaid } from './mermaid.js';
-export { createPlatformToolInvoker } from './platform-tools.js';
+export { createComposeToolInvoker, createPlatformToolInvoker } from './platform-tools.js';
 export {
   type AgentLane,
   chooseLane,

@@ -72,7 +72,7 @@ function withInheritedReadPath(
   node: WorkflowNode,
   ctx: InterpContext
 ): Record<string, unknown> {
-  if (!/(^|__)read_file$|^fs\.read$/i.test(toolName)) return args;
+  if (!/(^|__)read_file$|^fs\.read$|^read$/i.test(toolName)) return args;
   const current = args.path ?? args.file ?? args.filepath ?? args.filename ?? args.target;
   if (looksLikeFilePath(current) || (current && typeof current === 'object')) return args;
   for (const dep of node.dependsOn ?? []) {
@@ -149,6 +149,20 @@ export async function executeWorkflow(
   const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
   const remaining = new Set(dsl.nodes.map((n) => n.id));
 
+  const snapshotNodes = (): NodeResult[] =>
+    dsl.nodes.map(
+      (node) => results.get(node.id) ?? { id: node.id, tool: node.tool, status: 'pending' }
+    );
+
+  const fail = (
+    code: string,
+    message: string,
+    nodeId?: string,
+    options?: { fatal?: boolean; details?: JsonValue; partialOutput?: JsonValue }
+  ): never => {
+    throw new WorkflowError(code, message, nodeId, snapshotNodes(), options);
+  };
+
   const ctxOf = (): InterpContext => ({
     intent: options.intent ?? {},
     nodes: Object.fromEntries([...results.entries()].map(([id, r]) => [id, { output: r.output }])),
@@ -221,7 +235,7 @@ export async function executeWorkflow(
           nodeId: node.id,
           total: listRaw.length,
         });
-        const collected = await Promise.all(
+        const outcomes = await Promise.all(
           listRaw.map(async (item, index) => {
             const itemCtx: InterpContext = { ...parentCtx, item: item as JsonValue };
             const args = withInheritedReadPath(
@@ -252,7 +266,7 @@ export async function executeWorkflow(
                 status: 'completed',
                 ...(typeof args.url === 'string' ? { url: args.url } : {}),
               });
-              return value;
+              return { value };
             } catch (itemErr) {
               const message = itemErr instanceof Error ? itemErr.message : String(itemErr);
               await emitSafe(options.sink, 'workflow-foreach-item', {
@@ -263,14 +277,28 @@ export async function executeWorkflow(
                 error: message,
                 ...(typeof args.url === 'string' ? { url: args.url } : {}),
               });
-              return jsonValue({
-                skipped: true,
-                error: message,
-                ...(typeof args.url === 'string' ? { url: args.url } : {}),
-              });
+              return {
+                value: jsonValue({
+                  skipped: true,
+                  error: message,
+                  ...(typeof args.url === 'string' ? { url: args.url } : {}),
+                }),
+                error: itemErr,
+              };
             }
           })
         );
+        const collected = outcomes.map((outcome) => outcome.value);
+        const fatal = outcomes.find(
+          (outcome) => outcome.error instanceof WorkflowError && outcome.error.fatal
+        )?.error as WorkflowError | undefined;
+        if (fatal) {
+          throw new WorkflowError(fatal.code, fatal.message, node.id, undefined, {
+            fatal: true,
+            details: fatal.details,
+            partialOutput: collected,
+          });
+        }
         const itemFailures = collected.filter(
           (row) => row && typeof row === 'object' && !Array.isArray(row) && 'skipped' in row
         ).length;
@@ -340,9 +368,13 @@ export async function executeWorkflow(
       const nodeId = err instanceof WorkflowError ? (err.nodeId ?? node.id) : node.id;
       const code = err instanceof WorkflowError ? err.code : 'node_failed';
       const message = err instanceof Error ? err.message : String(err);
+      const workflowError = err instanceof WorkflowError ? err : undefined;
       results.set(node.id, {
         ...base,
         status: 'failed',
+        ...(workflowError?.partialOutput !== undefined
+          ? { output: workflowError.partialOutput }
+          : {}),
         error: message,
         endedAt: new Date().toISOString(),
         durationMs: Date.now() - started,
@@ -353,7 +385,44 @@ export async function executeWorkflow(
         error: message,
         durationMs: Date.now() - started,
       });
-      throw new WorkflowError(code, message, nodeId);
+      fail(code, message, nodeId, {
+        fatal: workflowError?.fatal,
+        details: workflowError?.details,
+        partialOutput: workflowError?.partialOutput,
+      });
+    }
+  };
+
+  const markBlockedDependents = async (): Promise<void> => {
+    const blocked = new Set(
+      [...results.values()]
+        .filter((result) => result.status === 'failed')
+        .map((result) => result.id)
+    );
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const node of dsl.nodes) {
+        if (results.get(node.id)?.status !== 'pending') continue;
+        if (!(node.dependsOn ?? []).some((dependency) => blocked.has(dependency))) continue;
+        const endedAt = new Date().toISOString();
+        results.set(node.id, {
+          id: node.id,
+          tool: node.tool,
+          status: 'skipped',
+          error: 'upstream failed',
+          endedAt,
+          durationMs: 0,
+        });
+        blocked.add(node.id);
+        changed = true;
+        await emitSafe(options.sink, 'workflow-node-end', {
+          nodeId: node.id,
+          status: 'skipped',
+          reason: 'upstream_failed',
+          durationMs: 0,
+        });
+      }
     }
   };
 
@@ -369,9 +438,9 @@ export async function executeWorkflow(
     if (ready.length === 0) {
       const failed = [...results.values()].find((r) => r.status === 'failed');
       if (failed) {
-        throw new WorkflowError('node_failed', failed.error ?? 'upstream failed', failed.id);
+        fail('node_failed', failed.error ?? 'upstream failed', failed.id);
       }
-      throw new WorkflowError('cycle', `no runnable nodes among: ${[...remaining].join(', ')}`);
+      fail('cycle', `no runnable nodes among: ${[...remaining].join(', ')}`);
     }
 
     const wave = ready.map((id) => byId.get(id)).filter((n): n is WorkflowNode => Boolean(n));
@@ -380,12 +449,16 @@ export async function executeWorkflow(
 
     const firstReject = settled.find((s) => s.status === 'rejected');
     if (firstReject && firstReject.status === 'rejected') {
+      await markBlockedDependents();
       const reason = firstReject.reason;
-      if (reason instanceof WorkflowError) throw reason;
-      throw new WorkflowError(
-        'node_failed',
-        reason instanceof Error ? reason.message : String(reason)
-      );
+      if (reason instanceof WorkflowError) {
+        fail(reason.code, reason.message, reason.nodeId, {
+          fatal: reason.fatal,
+          details: reason.details,
+          partialOutput: reason.partialOutput,
+        });
+      }
+      fail('node_failed', reason instanceof Error ? reason.message : String(reason));
     }
   }
 
