@@ -22,7 +22,7 @@ describe('ensureAo04Experiment', () => {
   });
 
   it('creates when lookup is 404', async () => {
-    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {
         return new Response(
           JSON.stringify({ experimentId: 'exp-2', status: 'ready', baseline: 'ready' }),

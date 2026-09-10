@@ -6,7 +6,9 @@ import {
   collectNodeStatuses,
   countDagProgress,
   extractWorkflowArticle,
+  extractWorkflowNodeResults,
   findLatestWorkflowPlan,
+  findWorkflowPlanPart,
   findWorkflowPlans,
   inferWaves,
   isWorkflowHiddenToolPart,
@@ -133,7 +135,7 @@ describe('workflow-dag-model', () => {
     const latest = findLatestWorkflowPlan([message]);
     expect(latest?.graph?.nodes).toHaveLength(3);
     if (!latest?.graph) throw new Error('expected workflow graph');
-    expect(collectNodeStatuses(message, latest.graph)).toEqual({
+    expect(collectNodeStatuses(message, latest.graph, latest.part)).toEqual({
       pre: 'completed',
       protected: state === 'output-error' ? 'failed' : 'completed',
       post: state === 'output-error' ? 'pending' : 'completed',
@@ -163,7 +165,10 @@ describe('workflow-dag-model', () => {
       ],
     } as UIMessage;
     expect(graph.edges).toEqual([]);
-    expect(collectNodeStatuses(message, graph)).toEqual({ a: 'pending', b: 'pending' });
+    expect(collectNodeStatuses(message, graph, findWorkflowPlanPart(message))).toEqual({
+      a: 'pending',
+      b: 'pending',
+    });
     expect(parseWorkflowGraph('Model says node a completed')).toBeNull();
     expect(parseWorkflowGraph('OPENRUSH_WORKFLOW_DAG:{broken')).toBeNull();
   });
@@ -227,6 +232,34 @@ describe('workflow-dag-model', () => {
     expect(runs.map((run) => run.part.toolCallId)).toEqual(['first', 'second', 'third']);
     expect(runs.map((run) => run.graph?.name)).toEqual(['first', 'second', 'third']);
     expect(new Set(runs.map((run) => run.key)).size).toBe(3);
+  });
+
+  it('keeps node status evidence isolated between workflow runs in one message', () => {
+    const message = {
+      id: 'same-message',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'dynamic-tool',
+          toolName: 'workflow_run',
+          toolCallId: 'first',
+          state: 'output-available',
+          output: { name: 'first', nodes: [{ id: 'read', tool: 'read' }] },
+        },
+        {
+          type: 'dynamic-tool',
+          toolName: 'workflow_run',
+          toolCallId: 'second',
+          state: 'output-error',
+          errorText:
+            'failed\nOPENRUSH_WORKFLOW_DAG:{"name":"second","nodes":[{"id":"read","tool":"read"}]}',
+        },
+      ],
+    } as UIMessage;
+
+    const first = findWorkflowPlans([message])[0];
+    if (!first?.graph) throw new Error('expected first workflow graph');
+    expect(collectNodeStatuses(message, first.graph, first.part)).toEqual({ read: 'pending' });
   });
 
   it('parses graph output with edges and waves', () => {
@@ -308,7 +341,9 @@ describe('workflow-dag-model', () => {
       ],
     } as UIMessage;
     if (!graph) throw new Error('expected graph');
-    expect(collectNodeStatuses(message, graph)).toEqual({ geo: 'running' });
+    expect(collectNodeStatuses(message, graph, findWorkflowPlanPart(message))).toEqual({
+      geo: 'running',
+    });
     expect(isWorkflowHiddenToolPart(message.parts[1], message)).toBe(true);
   });
 
@@ -343,7 +378,7 @@ describe('workflow-dag-model', () => {
       ],
     } as UIMessage;
     if (!graph) throw new Error('expected graph');
-    expect(collectNodeStatuses(message, graph)).toEqual({
+    expect(collectNodeStatuses(message, graph, findWorkflowPlanPart(message))).toEqual({
       walk: 'completed',
       compose: 'completed',
     });
@@ -361,10 +396,66 @@ describe('workflow-dag-model', () => {
     expect(graph?.edges).toEqual([{ from: 'a', to: 'b' }]);
   });
 
+  it('reads node results and article from a workflow marker payload', () => {
+    const output = `快车道已执行
+OPENRUSH_WORKFLOW_DAG:${JSON.stringify({
+      name: 'trip',
+      nodes: [{ id: 'geo', tool: 'amap-maps__maps_geo', dependsOn: [] }],
+      nodeResults: { geo: { city: '上海' } },
+      article: '上海周末路线。',
+    })}`;
+
+    expect(extractWorkflowNodeResults(output)).toEqual({ geo: { city: '上海' } });
+    expect(extractWorkflowArticle(output)).toBe('上海周末路线。');
+  });
+
+  it('reads legacy markdown node facts without a marker', () => {
+    const output = `快车道已执行「trip」· 1 个节点
+- geo (amap-maps__maps_geo)
+
+### geo (amap-maps__maps_geo)
+{"city":"上海"}`;
+
+    expect(parseWorkflowGraph(output)?.name).toBe('trip');
+    expect(extractWorkflowNodeResults(output)).toEqual({ geo: { city: '上海' } });
+  });
+
+  it('uses workflow_run overall state only when node evidence is absent', () => {
+    const payload = {
+      name: 'trip',
+      nodes: [{ id: 'geo', tool: 'amap-maps__maps_geo', dependsOn: [] }],
+      nodeResults: { geo: { city: '上海' } },
+    };
+    const output = `OPENRUSH_WORKFLOW_DAG:${JSON.stringify(payload)}`;
+    const graph = parseWorkflowGraph(output);
+    const message = {
+      id: 'a-overall',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'dynamic-tool',
+          toolCallId: 'run-overall',
+          toolName: 'workflow_run',
+          state: 'output-available',
+          input: {},
+          output,
+        },
+      ],
+    } as UIMessage;
+
+    expect(graph).not.toBeNull();
+    if (!graph) throw new Error('expected workflow graph');
+    expect(collectNodeStatuses(message, graph, findWorkflowPlanPart(message))).toEqual({
+      geo: 'completed',
+    });
+  });
+
   it('pretty-prints MCP tool names', () => {
     expect(prettyToolName('amap-maps__maps_geo')).toContain('高德');
+    expect(prettyToolName('mcp__keenable-search__web_search')).toContain('网页搜索');
     expect(prettyToolName('http.fetch')).toBe('抓取网页');
     expect(prettyToolName('ao04_read_status')).toBe('项目质量检查 · AO-04');
+    expect(prettyToolName('workflow_run')).toBe('快车道');
   });
 
   it('labels sequential waves as steps instead of repeating 串行 · 1', () => {

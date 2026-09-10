@@ -117,11 +117,18 @@ export function buildDshChildEnv(input: {
     ...process.env,
     ...(input.env ?? {}),
   };
-  if (input.cwd) childEnv.DSH_CWD = input.cwd;
+  if (input.cwd) {
+    childEnv.DSH_CWD = input.cwd;
+    childEnv.WORKFLOW_WORKSPACE = childEnv.WORKFLOW_WORKSPACE || input.cwd;
+  }
   if (input.systemPrompt) childEnv.DSH_SYSTEM_PROMPT = input.systemPrompt;
   if (input.sessionRoot) childEnv.DSH_SESSION_ROOT = input.sessionRoot;
   if (input.repoRoot) childEnv.DSH_ROOT = childEnv.DSH_ROOT ?? input.repoRoot;
   childEnv.DSH_SNAPSHOT = childEnv.DSH_SNAPSHOT ?? '1';
+  const workflowUrl = childEnv.OPENRUSH_WORKFLOW_RUN_URL?.trim();
+  childEnv.OPENRUSH_WORKFLOW_RUN_URL = workflowUrl
+    ? workflowUrl.replace(/\/$/, '')
+    : `http://127.0.0.1:${childEnv.PORT ?? '8787'}/workflow-run`;
   return childEnv;
 }
 // AIGC END

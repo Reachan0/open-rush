@@ -55,6 +55,7 @@ export class WorkflowUiMapper {
   private streamedText = false;
   private readonly composeIds = new Set<string>();
   private readonly toolNames = new Map<string, string>();
+  private planOutputSent = false;
 
   constructor(messageId: string = crypto.randomUUID()) {
     this.messageId = messageId;
@@ -73,6 +74,8 @@ export class WorkflowUiMapper {
     switch (event.eventType) {
       case 'workflow-planning':
         return this.mapPlanning(payload);
+      case 'workflow-plan':
+        return this.mapPlan(payload);
       case 'workflow-graph':
         return this.mapGraph(payload);
       case 'workflow-node-start':
@@ -118,7 +121,36 @@ export class WorkflowUiMapper {
     ];
   }
 
+  private mapPlan(payload: Record<string, unknown>): UIMessageChunk[] {
+    const dsl = isRecord(payload.dsl) ? payload.dsl : payload;
+    this.rememberGraphNodes(dsl);
+    this.planOutputSent = true;
+    return [
+      {
+        type: 'tool-output-available',
+        toolCallId: PLAN_TOOL_ID,
+        output: {
+          source: payload.source,
+          attempts: payload.attempts,
+          dsl,
+        },
+      },
+    ];
+  }
+
+  private rememberGraphNodes(payload: Record<string, unknown>): void {
+    const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+    for (const node of nodes) {
+      if (!isRecord(node) || typeof node.id !== 'string') continue;
+      const tool = typeof node.tool === 'string' ? node.tool : 'tool';
+      this.toolNames.set(node.id, tool);
+      if (isComposeTool(tool)) this.composeIds.add(node.id);
+    }
+  }
+
   private mapGraph(payload: Record<string, unknown>): UIMessageChunk[] {
+    this.rememberGraphNodes(payload);
+    if (this.planOutputSent) return [];
     const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
     const listed: Array<{ id: string; tool: string; dependsOn: string[] }> = [];
     for (const node of nodes) {
@@ -128,8 +160,6 @@ export class WorkflowUiMapper {
         ? node.dependsOn.filter((item): item is string => typeof item === 'string')
         : [];
       listed.push({ id: node.id, tool, dependsOn });
-      this.toolNames.set(node.id, tool);
-      if (isComposeTool(tool)) this.composeIds.add(node.id);
     }
     const edges = Array.isArray(payload.edges)
       ? payload.edges.filter(

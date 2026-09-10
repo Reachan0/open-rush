@@ -9,8 +9,8 @@ export const CODING_TOOLS_PREFIX = 'coding-tools';
 export type CodingToolsPermissionMode = 'safe' | 'trusted' | 'dangerous';
 
 export function codingToolsEnabled(): boolean {
-  const flag = (process.env.CODING_TOOLS_MCP ?? '1').trim().toLowerCase();
-  return !['0', 'false', 'off', 'no'].includes(flag);
+  const flag = (process.env.CODING_TOOLS_MCP ?? '').trim().toLowerCase();
+  return ['1', 'true', 'on', 'yes'].includes(flag);
 }
 
 export function codingToolsPermissionMode(): CodingToolsPermissionMode {
@@ -48,22 +48,29 @@ function commandOnPath(bin: string): boolean {
 }
 
 export function resolveWorkflowWorkspace(start: string): string {
+  // AIGC START
   const override = (
     process.env.WORKFLOW_WORKSPACE ??
     process.env.CODING_TOOLS_MCP_WORKSPACE ??
+    process.env.OPENRUSH_ROOT ??
     ''
   ).trim();
   if (override) return resolve(override);
   let dir = resolve(start);
+  let gitFallback: string | undefined;
   for (let i = 0; i < 10; i += 1) {
-    if (existsSync(join(dir, 'pnpm-workspace.yaml')) || existsSync(join(dir, '.git'))) {
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) {
       return dir;
+    }
+    if (!gitFallback && existsSync(join(dir, '.git'))) {
+      gitFallback = dir;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return resolve(start);
+  return gitFallback ?? resolve(start);
+  // AIGC END
 }
 
 export function codingReadPathCandidates(path: unknown): string[] {

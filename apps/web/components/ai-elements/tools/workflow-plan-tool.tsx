@@ -16,8 +16,8 @@ import type { ToolRendererProps } from '../tool-registry';
 export function WorkflowPlanTool({ part, message }: ToolRendererProps) {
   const graph = parseWorkflowGraphFromPart(part);
   const statuses = useMemo(
-    () => (graph ? collectNodeStatuses(message, graph) : {}),
-    [graph, message]
+    () => (graph ? collectNodeStatuses(message, graph, part) : {}),
+    [graph, message, part]
   );
   const progress = countDagProgress(statuses);
   const planning = !graph && (part.state === 'input-available' || part.state === 'input-streaming');

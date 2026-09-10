@@ -15,7 +15,7 @@ export function WorkflowPanel({ messages }: { messages: UIMessage[] }) {
   const currentIndex = current ? runs.findIndex((run) => run.key === current.key) : -1;
   const graph = current?.graph ?? null;
   const statuses = useMemo(
-    () => (graph && current ? collectNodeStatuses(current.message, graph) : {}),
+    () => (graph && current ? collectNodeStatuses(current.message, graph, current.part) : {}),
     [graph, current]
   );
   const progress = countDagProgress(statuses);

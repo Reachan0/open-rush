@@ -1,6 +1,7 @@
 // @ts-nocheck
 'use client';
 
+import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import type { DynamicToolUIPart, ToolUIPart } from 'ai';
@@ -21,7 +22,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
-    className={cn('group not-prose mb-3 w-full', className)}
+    className={cn('group not-prose mb-4 w-full rounded-md border bg-card/40', className)}
     {...props}
   />
 );
@@ -72,10 +73,10 @@ const statusIcons: Record<ToolPart['state'], ReactNode> = {
 };
 
 export const getStatusBadge = (status: ToolPart['state']) => (
-  <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+  <Badge className="ml-auto shrink-0 gap-1 text-xs" variant="secondary">
     {statusIcons[status]}
     {statusLabels[status]}
-  </span>
+  </Badge>
 );
 
 export const ToolHeader = ({
@@ -91,7 +92,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(
-        'flex w-full items-center gap-2 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground',
+        'flex w-full items-center gap-2 p-3 text-sm text-muted-foreground transition-colors hover:text-foreground',
         className
       )}
       {...props}
@@ -111,7 +112,7 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 ml-2 mt-2 space-y-4 border-l border-border/60 pl-4 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in',
+      'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 border-t border-border/60 p-4 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in',
       className
     )}
     {...props}

@@ -12,7 +12,8 @@
   name: '@deepseek-ai/dsh-llm-deepseek'
   config:
     thinking: enabled
-    reasoningEffort: max
+    # DSH default is high (no "medium"). max makes 出游 Thought 很长; override with DSH_REASONING_EFFORT=max if needed.
+    reasoningEffort: !!js "(['off', 'low', 'high', 'max'].includes((process.env.DSH_REASONING_EFFORT ?? '').trim()) ? process.env.DSH_REASONING_EFFORT.trim() : 'high')"
     baseURL: !!js process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
 
 - id: subprocess
@@ -64,6 +65,38 @@
   config:
     allowParallelInProgress: true
 
+- id: tool-call-timeout
+  name: '@deepseek-ai/dsh-tool-call-timeout-policy'
+
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: deepseek-official
+    fetchProvider: http
+
+- id: web-search-deepseek
+  name: '@deepseek-ai/dsh-web-search-deepseek'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+
+- id: web-fetch-http
+  name: '@deepseek-ai/dsh-web-fetch-http'
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    searchTimeoutMs: 60000
+    fetchTimeoutMs: 30000
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# Amap / coding-tools MCP via @deepseek-ai/dsh-mcp-client (loaded only when env/command exist).
+- id: openrush-loop-mcp
+  name: ./openrush-loop-mcp.mjs
+
 - id: fs-local
   name: '@deepseek-ai/dsh-fs-local'
   config:
@@ -74,6 +107,11 @@
 
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
+
+# After MCP + fs so the apply-time log is complete; the prompt still re-reads
+# schemas on each assemble because MCP connect can finish after this plugin.
+- id: tool-workflow-run
+  name: ./tool-workflow-run.mjs
 
 - id: token-meter
   name: '@deepseek-ai/dsh-token-meter'

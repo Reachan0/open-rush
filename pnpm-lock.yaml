@@ -44,6 +44,9 @@ importers:
       '@open-rush/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@open-rush/dsh-tool-workflow-run':
+        specifier: workspace:*
+        version: link:../../packages/dsh-tool-workflow-run
       '@open-rush/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp

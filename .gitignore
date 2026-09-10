@@ -35,6 +35,7 @@ test-results/
 .pnpm-lock.yaml
 
 .claude/worktrees/
+.worktrees/
 
 # AIGC START
 # Local-only junk: DSH/preview once wrote a static site into the worker cwd.

@@ -45,6 +45,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function markerRecord(text: string): Record<string, unknown> | null {
+  const marker = text.lastIndexOf(WORKFLOW_DAG_MARKER);
+  if (marker < 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(text.slice(marker + WORKFLOW_DAG_MARKER.length).trim());
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function isComposeToolName(name: string): boolean {
   return COMPOSE_TOOL.test(name);
 }
@@ -214,6 +225,10 @@ function outputText(output: unknown): string {
 }
 
 export function extractWorkflowNodeResults(output: unknown): Record<string, unknown> {
+  if (typeof output === 'string') {
+    const marked = markerRecord(output);
+    if (isRecord(marked?.nodeResults)) return marked.nodeResults;
+  }
   if (isRecord(output) && isRecord(output.nodeResults)) return output.nodeResults;
   if (isRecord(output) && Array.isArray(output.nodes)) {
     const results = Object.fromEntries(
@@ -243,6 +258,11 @@ export function extractWorkflowNodeResults(output: unknown): Record<string, unkn
 }
 
 export function extractWorkflowArticle(output: unknown): string {
+  if (typeof output === 'string') {
+    const marked = markerRecord(output);
+    if (typeof marked?.article === 'string') return marked.article;
+    if (typeof marked?.output === 'string') return marked.output;
+  }
   if (isRecord(output) && typeof output.article === 'string') return output.article;
   if (isRecord(output) && typeof output.output === 'string') return output.output;
   const compose = parseWorkflowGraph(output)?.nodes.find((node) => isComposeToolName(node.tool));
@@ -325,11 +345,25 @@ export function toolStateToDagStatus(state: DynamicToolUIPart['state'] | undefin
 
 export function collectNodeStatuses(
   message: UIMessage,
-  graph: WorkflowDagGraph
+  graph: WorkflowDagGraph,
+  plan: DynamicToolUIPart | undefined
 ): Record<string, DagNodeStatus> {
   const statuses: Record<string, DagNodeStatus> = {};
   for (const node of graph.nodes) statuses[node.id] = node.status ?? 'pending';
-  if (findWorkflowPlanPart(message)?.toolName === WORKFLOW_RUN_TOOL) return statuses;
+  if (plan?.toolName === WORKFLOW_RUN_TOOL) {
+    const hasNodeEvidence = graph.nodes.some((node) => node.status !== undefined);
+    const planOutput = plan.state === 'output-error' ? plan.errorText : plan.output;
+    const hasRunEvidence =
+      (typeof planOutput === 'string' && planOutput.includes(WORKFLOW_DAG_MARKER)) ||
+      (isRecord(planOutput) && isRecord(planOutput.nodeResults));
+    if (!hasNodeEvidence && hasRunEvidence) {
+      const overall = toolStateToDagStatus(plan.state);
+      const fill: DagNodeStatus =
+        overall === 'running' || overall === 'pending' ? 'pending' : overall;
+      for (const node of graph.nodes) statuses[node.id] = fill;
+    }
+    return statuses;
+  }
   for (const part of message.parts) {
     if (part.type !== 'dynamic-tool') continue;
     const toolPart = part as DynamicToolUIPart;

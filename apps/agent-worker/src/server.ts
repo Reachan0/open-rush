@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { serve } from '@hono/node-server';
 import {
   ensureProjectDir,
@@ -12,13 +14,11 @@ import {
   runDshToUIMessageStream,
 } from '@open-rush/agent-runtime';
 import {
-  chooseLane,
   createPlatformToolInvoker,
   createTravelToolInvoker,
   type LlmComplete,
   llmCompleteFromEnv,
   mergeToolInvokers,
-  routingIntent,
   type ToolInvoker,
   WEEKEND_TRIP_INTENT,
   weekendTripDsl,
@@ -43,7 +43,7 @@ import {
 } from './ao04-experiment.js';
 import { resolveWorkflowWorkspace, tryConnectCodingTools } from './coding-mcp.js';
 import { WORKFLOW_LIVE_HTML } from './workflow-live-page.js';
-import { workflowRunToSseResponse } from './workflow-ui-stream.js';
+import { resolveWorkflowRunUrl, WORKFLOW_RUN_PROMPT_SECTION } from './workflow-run-tool.js';
 
 const app = new Hono();
 
@@ -51,6 +51,15 @@ const app = new Hono();
 // AIGC START
 const activeSessions = new Map<string, { controller: AbortController; runId: string }>();
 // AIGC END
+
+function compositionHasWorkflowRun(configPath: string): boolean {
+  try {
+    const source = readFileSync(resolve(configPath), 'utf8');
+    return source.includes('tool-workflow-run') || source.includes('dsh-tool-workflow-run');
+  } catch {
+    return false;
+  }
+}
 
 // AIGC START
 function withStreamCleanup(response: Response, onDone: () => void | Promise<void>): Response {
@@ -277,6 +286,21 @@ app.post('/prompt', async (c) => {
         ? (process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8')
         : (process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'sonnet'));
     // AIGC END
+    const keenableBaseRaw = (
+      process.env.KEENABLE_BASE_URL ||
+      process.env.KEENABLE_API_URL ||
+      'https://api.keenable.ai'
+    )
+      .trim()
+      .replace(/\/$/, '');
+    const keenableBase = /^https?:\/\//i.test(keenableBaseRaw)
+      ? keenableBaseRaw
+      : 'https://api.keenable.ai';
+    const repoWorkspace = resolveWorkflowWorkspace(process.cwd());
+    const workspaceCwd =
+      process.env.AO04_SERVICE_DEMO === '1'
+        ? (process.env.WORKSPACE_PATH ?? projectPath ?? repoWorkspace)
+        : (projectPath ?? repoWorkspace);
     const providerEnv: Record<string, string> = {
       ...(env ?? {}),
       ...(process.env.ANTHROPIC_BASE_URL && { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL }),
@@ -284,6 +308,14 @@ app.post('/prompt', async (c) => {
       // AIGC START
       ...(process.env.DEEPSEEK_API_KEY && { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY }),
       ...(process.env.DEEPSEEK_BASE_URL && { DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL }),
+      ...(process.env.AMAP_MAPS_API_KEY && { AMAP_MAPS_API_KEY: process.env.AMAP_MAPS_API_KEY }),
+      ...(process.env.KEENABLE_API_KEY && { KEENABLE_API_KEY: process.env.KEENABLE_API_KEY }),
+      KEENABLE_API_URL: keenableBase,
+      KEENABLE_BASE_URL: keenableBase,
+      ...(process.env.KEENABLE_TITLE && { KEENABLE_TITLE: process.env.KEENABLE_TITLE }),
+      WORKFLOW_WORKSPACE: workspaceCwd,
+      OPENRUSH_WORKFLOW_RUN_URL: resolveWorkflowRunUrl(process.env),
+      ...(process.env.PORT && { PORT: process.env.PORT }),
       ...(process.env.NODE_TLS_REJECT_UNAUTHORIZED && {
         NODE_TLS_REJECT_UNAUTHORIZED: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
       }),
@@ -302,46 +334,19 @@ app.post('/prompt', async (c) => {
     };
 
     // AIGC START
-    const workspaceCwd =
-      process.env.AO04_SERVICE_DEMO === '1'
-        ? (process.env.WORKSPACE_PATH ?? projectPath ?? process.cwd())
-        : (projectPath ?? process.cwd());
-    const complete = llmCompleteFromEnv();
-
-    const laneIntent = routingIntent(userPrompt);
-    if (process.env.AO04_DEMO !== '1' && chooseLane(laneIntent) === 'workflow') {
-      try {
-        const tools = await workflowCatalog({
-          root: workspaceCwd,
-          complete,
-          userIntent: laneIntent,
-        });
-        return withStreamCleanup(
-          workflowRunToSseResponse((sink) =>
-            workflowRun({
-              intent: laneIntent,
-              tools,
-              complete,
-              allowHeuristic: !complete,
-              disableFallback: true,
-              signal: abortController.signal,
-              sink,
-            })
-          ),
-          () => releaseAo04()
-        );
-      } catch (err) {
-        console.warn(
-          `[Workflow] falling back to ${runtime}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
-
     if (runtime === 'dsh') {
+      const configuredComposition = process.env.DSH_CORDIS_CONFIG?.trim();
+      const workflowRunEnabled = configuredComposition
+        ? compositionHasWorkflowRun(configuredComposition)
+        : process.env.AO04_DEMO !== '1';
+      const dshSystemPrompt =
+        !workflowRunEnabled || effectiveSystemPrompt?.includes('workflow_run')
+          ? effectiveSystemPrompt
+          : [effectiveSystemPrompt, WORKFLOW_RUN_PROMPT_SECTION].filter(Boolean).join('\n\n');
       const response = runDshToUIMessageStream({
         prompt: userPrompt,
         sessionId: sid,
-        systemPrompt: effectiveSystemPrompt,
+        systemPrompt: dshSystemPrompt,
         modelId: effectiveModelId,
         cwd: workspaceCwd,
         abortSignal: abortController.signal,
@@ -499,6 +504,9 @@ app.post('/workflow-run', async (c) => {
           degraded: result.degraded,
           error: 'error' in result ? result.error : undefined,
           rounds: result.rounds,
+          nodes: result.nodes,
+          dsl: result.dsl,
+          nodeId: 'nodeId' in result ? result.nodeId : undefined,
         },
       });
     });
