@@ -36,10 +36,11 @@ bindSessionRun (real lease JSON)
   -> ProtectedTool -> real tool_app subprocess
 ```
 
-The graph path calls `runWorkflowFromLoop` with
-`eligibleToolNames: ['ao04_read_status']`; its runtime host returns the
-protected tool's `{ text: JSON }` envelope, so the AO-04 adapter is exercised
-at its configured boundary. Normal `read` calls use an ordinary object result.
+The graph path adds `ao04_read_status` through
+`eligibleToolNames: ['ao04_read_status']`; the normal safe read-only policy
+still admits runtime-injected Keenable search and Amap MCP tools. The protected
+tool's runtime host returns a `{ text: JSON }` envelope, so the AO-04 adapter is
+exercised at its configured boundary. Normal `read` calls use an ordinary object result.
 If a graph fails, the outer agent may temporarily see ordinary read-only tools
 to fill a missing fact. The explicitly protected `ao04_read_status` tool stays
 hidden from the outer catalog, so the agent cannot bypass its fast-lane node.

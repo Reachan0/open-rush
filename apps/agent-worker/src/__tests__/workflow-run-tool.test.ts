@@ -40,6 +40,17 @@ describe('DSH wiring', () => {
     expect(plugin).toContain('await Promise.all(jobs)');
   });
 
+  it('loads web search and Amap before workflow_run in the AO-04 composition', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const yaml = readFileSync(join(here, '../../dsh/cordis-ao04-fastlane.yml'), 'utf8');
+    expect(yaml).toContain('./openrush-loop-mcp.mjs');
+    expect(yaml.indexOf('./openrush-loop-mcp.mjs')).toBeLessThan(
+      yaml.indexOf('dsh-tool-workflow-run/dist/index.js')
+    );
+    expect(yaml).toContain('eligibleToolNames:');
+    expect(yaml).toContain('- ao04_read_status');
+  });
+
   it('does not pin DeepSeek thinking to reasoningEffort max', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const yaml = readFileSync(join(here, '../../dsh/cordis.yml'), 'utf8');

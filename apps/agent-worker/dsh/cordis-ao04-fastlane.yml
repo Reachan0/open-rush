@@ -89,6 +89,12 @@
     maxTokens: 8192
     compactionRetries: 1
 
+# Reuse the normal OpenRush Loop MCP bundle so Web Search and Amap remain
+# available in the AO-04 fast-lane composition. It must finish connecting
+# before workflow_run reads the runtime tool schemas.
+- id: openrush-loop-mcp
+  name: ./openrush-loop-mcp.mjs
+
 # The AO-04 tool must mount before workflow_run so its schema is available at
 # plugin assembly time.  workflow_run receives the protected name explicitly;
 # it does not infer a scenario allow-list from the model prompt.
