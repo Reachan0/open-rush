@@ -18,9 +18,9 @@ flowchart LR
   you --> live["快车道实时图 :8787/workflow-live"]
   web --> cw[control-worker 无 HTTP 口]
   cw --> aw["agent-worker :8787"]
-  aw -->|"步骤清楚"| wf[快车道引擎]
-  aw -->|"写代码 / 含糊"| spawn[spawn DSH 子进程]
-  spawn --> dsh["deepseek-harness 源码 + 构建产物"]
+  aw --> spawn[spawn DSH 子进程]
+  spawn --> dsh["deepseek-harness + 原生工具 workflow_run"]
+  dsh -->|"模型决定调用"| wf["快车道 POST /workflow-run"]
   aw --> mcp[coding-tools MCP]
 ```
 
@@ -73,9 +73,26 @@ WORKFLOW_WORKSPACE=/home/ubuntu/projects/open-rush
 
 ---
 
+## 这些能力要哪些 API
+
+密钥**不要写进仓库**。模板在 `apps/agent-worker/.env.example`，真 Key 只放各机自己的 `.env.local`（已 gitignore）。代码里写死的是默认地址和路径，不是 Key。
+
+| 能力 | 环境变量 | 代码里写死了什么 | 没配会怎样 |
+|------|----------|------------------|------------|
+| 规划 / 慢车道模型 | `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DSH_MODEL` | 无密钥。网关地址由 env 提供 | 规划失败，DSH 起不来 |
+| `web.search`（开放网页搜） | `KEENABLE_API_KEY`（可选）、`KEENABLE_API_URL`（可选）、`KEENABLE_TITLE`（可选） | 默认 `https://api.keenable.ai`；有 Key 走 `POST /v1/search`，没 Key 走 `POST /v1/search/public` | 仍能搜，走 Keenable 免 Key 公共口，额度更紧 |
+| 出游 / 步行 / 天气 | `AMAP_MAPS_API_KEY`（可选） | 高德 MCP 包名 | 走出游假数据，这是预期 |
+| 搜仓库 / 读文件 | 无第三方 Key | `uvx` 拉 coding-tools MCP | catalog 里没有 `coding-tools__*`，退回 `fs.read` / `fs.search` |
+
+`web.search` 不是 Tavily / Bing / Google。实现在 `packages/workflow/src/platform-tools.ts`：读 env，没有 Key 就打公共口。
+
+演示机 `.env.local` 建议至少有 DeepSeek 网关；Keenable Key 有更好（真实搜索演示更稳），没有也能跑。高德 Key 可空。
+
+---
+
 ## DeepSeek Harness 怎么部署
 
-慢车道（聊天里写代码、问清楚、快车道失败回退）都靠它。演示机上已经有一份，新机器按下面做一遍。
+慢车道（聊天里写代码、问清楚、以及决定要不要调用原生工具 `workflow_run`）都靠它。改过 `cordis.yml` 或快车道插件后必须重启 agent-worker，并确保 `@open-rush/dsh-tool-workflow-run` 已构建。演示机上已经有一份 DSH，新机器按下面做一遍。
 
 1. **克隆到 OpenRush 的同级目录**（worker 默认找 `../deepseek-harness`）：
 

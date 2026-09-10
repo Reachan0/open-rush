@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import {
   collectNodeStatuses,
   countDagProgress,
+  extractWorkflowArticle,
+  extractWorkflowNodeResults,
   findLatestWorkflowPlan,
   inferWaves,
   isWorkflowHiddenToolPart,
@@ -12,6 +14,7 @@ import {
   parseWorkflowGraph,
   prettyToolName,
   waveRowLabel,
+  workflowErrorHeadline,
 } from '../workflow-dag-model';
 
 describe('workflow-dag-model', () => {
@@ -149,7 +152,10 @@ describe('workflow-dag-model', () => {
 
   it('pretty-prints MCP tool names', () => {
     expect(prettyToolName('amap-maps__maps_geo')).toContain('高德');
+    expect(prettyToolName('mcp__amap-maps__maps_weather')).toContain('高德');
+    expect(prettyToolName('mcp__keenable-search__web_search')).toContain('网页搜索');
     expect(prettyToolName('http.fetch')).toBe('抓取网页');
+    expect(prettyToolName('workflow_run')).toBe('快车道');
   });
 
   it('labels sequential waves as steps instead of repeating 串行 · 1', () => {
@@ -158,6 +164,142 @@ describe('workflow-dag-model', () => {
     expect(waveRowLabel([{ id: 'b' }], 2)).toBe('步骤 2');
     expect(waveRowLabel([{ id: 'x' }, { id: 'y' }], 1)).toBe('并行 · 2');
     expect(waveRowLabel([{ id: '__end__', terminal: 'end' }], 0)).toBe('出口');
+  });
+
+  it('unwraps planner output nested under dsl', () => {
+    const graph = parseWorkflowGraph({
+      source: 'llm',
+      dsl: {
+        name: 'trip',
+        nodes: [
+          { id: 'geo', tool: 'geo.locate', dependsOn: [] },
+          { id: 'write', tool: 'text.compose', dependsOn: ['geo'] },
+        ],
+      },
+    });
+    expect(graph?.name).toBe('trip');
+    expect(graph?.nodes.map((node) => node.id)).toEqual(['geo', 'write']);
+    expect(graph?.edges).toEqual([{ from: 'geo', to: 'write' }]);
+  });
+
+  it('parses a native workflow_run tool card from the DAG marker', () => {
+    const payload = {
+      name: 'hangzhou_westlake_run_plan',
+      nodes: [
+        { id: 'weather_today', tool: 'amap-maps__maps_weather', dependsOn: [] },
+        { id: 'compose', tool: 'text.compose', dependsOn: ['weather_today'] },
+      ],
+      nodeResults: { weather_today: { temp: 28 } },
+      article: '断桥出发。',
+    };
+    const output = `快车道已执行「hangzhou_westlake_run_plan」· 2 个节点
+- weather_today (amap-maps__maps_weather)
+- compose (text.compose) ← weather_today
+
+断桥出发。
+
+OPENRUSH_WORKFLOW_DAG:${JSON.stringify(payload)}`;
+    const graph = parseWorkflowGraph(output);
+    expect(graph?.name).toBe('hangzhou_westlake_run_plan');
+    expect(graph?.waves[0]).toEqual(['weather_today']);
+    expect(extractWorkflowNodeResults(output)).toEqual({ weather_today: { temp: 28 } });
+    expect(extractWorkflowArticle(output)).toBe('断桥出发。');
+  });
+
+  it('reads node facts from markdown when the DAG marker is missing', () => {
+    const output = `快车道已执行「trip」· 2 个节点
+- geo (geo.locate)
+- write (text.compose) ← geo
+
+周六先去外滩。
+
+各节点查到的事实：
+### geo (geo.locate)
+{"city":"上海","temp":28}
+
+以上材料已经由引擎查完。`;
+    expect(parseWorkflowGraph(output)?.name).toBe('trip');
+    expect(extractWorkflowNodeResults(output)).toEqual({ geo: { city: '上海', temp: 28 } });
+  });
+
+  it('parses workflow_run markdown when the DAG marker is missing', () => {
+    const graph = parseWorkflowGraph(`快车道已执行「trip」· 2 个节点
+- geo (geo.locate)
+- write (text.compose) ← geo
+
+周六先去外滩。`);
+    expect(graph?.name).toBe('trip');
+    expect(graph?.nodes).toEqual([
+      { id: 'geo', tool: 'geo.locate', dependsOn: [] },
+      { id: 'write', tool: 'text.compose', dependsOn: ['geo'] },
+    ]);
+  });
+
+  it('finds the latest workflow_run card and marks nodes complete', () => {
+    const output = `OPENRUSH_WORKFLOW_DAG:${JSON.stringify({
+      name: 'trip',
+      nodes: [{ id: 'geo', tool: 'geo.locate', dependsOn: [] }],
+      nodeResults: { geo: { city: '上海' } },
+    })}`;
+    const messages = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'dynamic-tool',
+            toolCallId: 'call-1',
+            toolName: 'workflow_run',
+            state: 'output-available',
+            input: { intent: '上海周末' },
+            output,
+          },
+        ],
+      },
+    ] as UIMessage[];
+    const latest = findLatestWorkflowPlan(messages);
+    expect(latest?.graph?.name).toBe('trip');
+    expect(collectNodeStatuses(latest!.message, latest!.graph!)).toEqual({ geo: 'completed' });
+    expect(isWorkflowHiddenToolPart(messages[0].parts[0], messages[0])).toBe(false);
+  });
+
+  it('draws the DAG from output-error errorText when success output is missing', () => {
+    const errorText = `快车道失败：Authentication Fails, Your api key: ****yaff is invalid
+快车道失败「westlake_run」· 已规划 2 个节点（图未跑完）
+- search (web_search)
+- write (text.compose) ← search
+
+OPENRUSH_WORKFLOW_DAG:${JSON.stringify({
+      name: 'westlake_run',
+      nodes: [
+        { id: 'search', tool: 'web_search', dependsOn: [] },
+        { id: 'write', tool: 'text.compose', dependsOn: ['search'] },
+      ],
+    })}`;
+    expect(workflowErrorHeadline(errorText)).toMatch(/^快车道失败：Authentication Fails/);
+    const messages = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'dynamic-tool',
+            toolCallId: 'call-err',
+            toolName: 'workflow_run',
+            state: 'output-error',
+            input: { intent: '西湖跑步' },
+            errorText,
+          },
+        ],
+      },
+    ] as UIMessage[];
+    const latest = findLatestWorkflowPlan(messages);
+    expect(latest?.graph?.name).toBe('westlake_run');
+    expect(latest?.graph?.nodes.map((node) => node.id)).toEqual(['search', 'write']);
+    expect(collectNodeStatuses(latest!.message, latest!.graph!)).toEqual({
+      search: 'failed',
+      write: 'failed',
+    });
   });
 
   it('finds the latest workflow plan in a conversation', () => {

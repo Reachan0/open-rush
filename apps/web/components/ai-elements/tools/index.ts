@@ -35,6 +35,7 @@ export const defaultToolRegistry = createToolRegistry({
   grep: BashTool,
   // AIGC START
   'workflow.plan': WorkflowPlanTool,
+  workflow_run: WorkflowPlanTool,
   // AIGC END
 });
 

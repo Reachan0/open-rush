@@ -12,13 +12,11 @@ import {
   runDshToUIMessageStream,
 } from '@open-rush/agent-runtime';
 import {
-  chooseLane,
   createPlatformToolInvoker,
   createTravelToolInvoker,
   type LlmComplete,
   llmCompleteFromEnv,
   mergeToolInvokers,
-  routingIntent,
   type ToolInvoker,
   WEEKEND_TRIP_INTENT,
   weekendTripDsl,
@@ -31,7 +29,7 @@ import { Hono } from 'hono';
 import { tryConnectAmapFromEnv } from './amap-mcp.js';
 import { resolveWorkflowWorkspace, tryConnectCodingTools } from './coding-mcp.js';
 import { WORKFLOW_LIVE_HTML } from './workflow-live-page.js';
-import { workflowRunToSseResponse } from './workflow-ui-stream.js';
+import { resolveWorkflowRunUrl, WORKFLOW_RUN_PROMPT_SECTION } from './workflow-run-tool.js';
 
 const app = new Hono();
 
@@ -196,6 +194,24 @@ app.post('/prompt', async (c) => {
         ? (process.env.DSH_MODEL ?? 'DeepSeek-V4-Flash-INT8')
         : (process.env.CLAUDE_MODEL ?? process.env.ANTHROPIC_MODEL ?? 'sonnet'));
     // AIGC END
+    // AIGC START
+    const keenableBaseRaw = (
+      process.env.KEENABLE_BASE_URL ||
+      process.env.KEENABLE_API_URL ||
+      'https://api.keenable.ai'
+    )
+      .trim()
+      .replace(/\/$/, '');
+    const keenableBase = /^https?:\/\//i.test(keenableBaseRaw)
+      ? keenableBaseRaw
+      : 'https://api.keenable.ai';
+    // AIGC END
+    // AIGC START
+    // DSH glob/read/grep 必须落在真实仓库根，不能用 Lux 空项目沙箱
+    // (workspace/<projectId> 只有 . 和 ..，模型会 bash env 逃到宿主机仓库，快车道 denylist 含 bash)。
+    const repoWorkspace = resolveWorkflowWorkspace(process.cwd());
+    const workspaceCwd = runtime === 'dsh' ? repoWorkspace : (projectPath ?? repoWorkspace);
+    // AIGC END
     const providerEnv: Record<string, string> = {
       ...(env ?? {}),
       ...(process.env.ANTHROPIC_BASE_URL && { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL }),
@@ -203,50 +219,31 @@ app.post('/prompt', async (c) => {
       // AIGC START
       ...(process.env.DEEPSEEK_API_KEY && { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY }),
       ...(process.env.DEEPSEEK_BASE_URL && { DEEPSEEK_BASE_URL: process.env.DEEPSEEK_BASE_URL }),
+      ...(process.env.AMAP_MAPS_API_KEY && { AMAP_MAPS_API_KEY: process.env.AMAP_MAPS_API_KEY }),
+      ...(process.env.KEENABLE_API_KEY && { KEENABLE_API_KEY: process.env.KEENABLE_API_KEY }),
+      KEENABLE_API_URL: keenableBase,
+      KEENABLE_BASE_URL: keenableBase,
+      ...(process.env.KEENABLE_TITLE && { KEENABLE_TITLE: process.env.KEENABLE_TITLE }),
       ...(process.env.NODE_TLS_REJECT_UNAUTHORIZED && {
         NODE_TLS_REJECT_UNAUTHORIZED: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
       }),
+      WORKFLOW_WORKSPACE: repoWorkspace,
+      OPENRUSH_WORKFLOW_RUN_URL: resolveWorkflowRunUrl(process.env),
+      ...(process.env.PORT && { PORT: process.env.PORT }),
       // AIGC END
     };
 
     // AIGC START
-    const workspaceCwd = projectPath ?? process.cwd();
-    const complete = llmCompleteFromEnv();
-
-    const laneIntent = routingIntent(userPrompt);
-    if (chooseLane(laneIntent) === 'workflow') {
-      try {
-        const tools = await workflowCatalog({
-          root: workspaceCwd,
-          complete,
-          userIntent: laneIntent,
-        });
-        return withStreamCleanup(
-          workflowRunToSseResponse((sink) =>
-            workflowRun({
-              intent: laneIntent,
-              tools,
-              complete,
-              allowHeuristic: !complete,
-              disableFallback: true,
-              signal: abortController.signal,
-              sink,
-            })
-          ),
-          () => activeSessions.delete(sid)
-        );
-      } catch (err) {
-        console.warn(
-          `[Workflow] falling back to ${runtime}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
+    const dshSystemPrompt = effectiveSystemPrompt?.includes('workflow_run')
+      ? effectiveSystemPrompt
+      : [effectiveSystemPrompt, WORKFLOW_RUN_PROMPT_SECTION].filter(Boolean).join('\n\n');
 
     if (runtime === 'dsh') {
+      console.log(`[Workspace] DSH cwd: ${workspaceCwd}`);
       const response = runDshToUIMessageStream({
         prompt: userPrompt,
         sessionId: sid,
-        systemPrompt: effectiveSystemPrompt,
+        systemPrompt: dshSystemPrompt,
         modelId: effectiveModelId,
         cwd: workspaceCwd,
         abortSignal: abortController.signal,
@@ -359,6 +356,7 @@ app.post('/workflow-run', async (c) => {
     disableFallback?: boolean;
     runId?: string;
     delayMs?: number;
+    root?: string;
   };
   const intent = body.intent ?? body.prompt;
   if (!intent && !body.dsl) {
@@ -366,8 +364,12 @@ app.post('/workflow-run', async (c) => {
   }
   const delayMs = Number.isFinite(body.delayMs) ? Number(body.delayMs) : 0;
   const complete = llmCompleteFromEnv();
+  const workspaceRoot =
+    typeof body.root === 'string' && body.root.trim()
+      ? body.root.trim()
+      : resolveWorkflowWorkspace(process.cwd());
   const tools = await workflowCatalog({
-    root: process.cwd(),
+    root: workspaceRoot,
     complete,
     userIntent: intent,
     delayMs,
@@ -404,6 +406,11 @@ app.post('/workflow-run', async (c) => {
           degraded: result.degraded,
           error: 'error' in result ? result.error : undefined,
           rounds: result.rounds,
+          // AIGC START
+          nodes: result.nodes,
+          dsl: result.dsl,
+          nodeId: 'nodeId' in result ? result.nodeId : undefined,
+          // AIGC END
         },
       });
     });

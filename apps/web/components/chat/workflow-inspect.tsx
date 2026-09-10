@@ -4,6 +4,9 @@
 import type { DynamicToolUIPart, UIMessage } from 'ai';
 import {
   type DagNodeStatus,
+  extractWorkflowArticle,
+  extractWorkflowNodeResults,
+  findWorkflowPlanPart,
   prettyToolName,
   previewDagValue,
   type WorkflowDagGraph,
@@ -21,6 +24,16 @@ function findNodePart(message: UIMessage, nodeId: string): DynamicToolUIPart | u
   return message.parts.find(
     (item): item is DynamicToolUIPart => item.type === 'dynamic-tool' && item.toolCallId === nodeId
   );
+}
+
+function nodeInspectData(message: UIMessage, nodeId: string) {
+  const part = findNodePart(message, nodeId);
+  if (part?.output != null || part?.input != null || part?.errorText) {
+    return { input: part.input, output: part.output, errorText: part.errorText };
+  }
+  const plan = findWorkflowPlanPart(message);
+  const results = extractWorkflowNodeResults(plan?.output);
+  return { input: undefined, output: results[nodeId], errorText: undefined };
 }
 
 export function WorkflowInspect({
@@ -44,7 +57,11 @@ export function WorkflowInspect({
   if (selectedId === '__end__') {
     const compose = graph.nodes.find((node) => /compose/i.test(node.tool));
     const part = compose ? findNodePart(message, compose.id) : undefined;
-    const text = part?.errorText ?? previewDagValue(part?.output);
+    const plan = findWorkflowPlanPart(message);
+    const text =
+      part?.errorText ||
+      (part?.output != null ? previewDagValue(part.output) : '') ||
+      extractWorkflowArticle(plan?.output);
     return (
       <div className="or-wf-inspect">
         <div className="k">结束 · 最终成文</div>
@@ -56,7 +73,7 @@ export function WorkflowInspect({
   if (!node) {
     return <div className="or-wf-inspect placeholder">未找到该节点。</div>;
   }
-  const part = findNodePart(message, node.id);
+  const part = nodeInspectData(message, node.id);
   const status = statuses[node.id] ?? 'pending';
   return (
     <div className="or-wf-inspect">
@@ -64,19 +81,21 @@ export function WorkflowInspect({
         {node.id} · {STATUS_LABEL[status]}
       </div>
       <div className="cmd">{prettyToolName(node.tool)}</div>
-      {part?.input != null && (
+      {part.input != null && (
         <>
           <div className="k">输入</div>
           <pre>{previewDagValue(part.input)}</pre>
         </>
       )}
-      {(part?.output || part?.errorText) && (
+      {(part.output || part.errorText) && (
         <>
           <div className="k">输出</div>
           <pre>{part.errorText ?? previewDagValue(part.output)}</pre>
         </>
       )}
-      {!part && <div className="placeholder">该节点还没有执行记录。</div>}
+      {!part.output && !part.errorText && !part.input && (
+        <div className="placeholder">该节点还没有执行记录。</div>
+      )}
     </div>
   );
 }

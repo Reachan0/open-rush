@@ -595,6 +595,81 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
       word-break: break-all;
     }
     .inspect .k { color: var(--faint); font-size: 11px; margin: 0 0 6px; }
+    .plan-box {
+      border-radius: 16px;
+      border: 1px solid rgba(140, 166, 191, 0.14);
+      background: rgba(255,255,255,0.03);
+      overflow: hidden;
+    }
+    .plan-box summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+      list-style: none;
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+    .plan-box summary::-webkit-details-marker { display: none; }
+    .plan-box summary::after {
+      content: "展开";
+      font-family: var(--mono);
+      font-size: 10px;
+      color: #c7d2fe;
+    }
+    .plan-box[open] summary::after { content: "收起"; }
+    .plan-box summary .badge {
+      font-family: var(--mono);
+      color: #c7d2fe;
+      border: 1px solid rgba(124, 140, 255, 0.22);
+      background: rgba(124, 140, 255, 0.09);
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      margin-left: auto;
+    }
+    .plan-meta {
+      padding: 0 12px 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .plan-outline {
+      margin: 0;
+      padding: 0 12px 10px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 12px;
+      color: #d5e2ef;
+    }
+    .plan-outline code {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #c7d2fe;
+    }
+    .plan-deps, .plan-input {
+      color: var(--faint);
+      font-size: 11px;
+      margin-top: 2px;
+      word-break: break-all;
+    }
+    .plan-json {
+      margin: 0;
+      max-height: 240px;
+      overflow: auto;
+      padding: 10px 12px 12px;
+      border-top: 1px solid rgba(140, 166, 191, 0.12);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.55;
+      color: #c8d5e3;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .hit-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
     .hit-list a { color: #9ec5ff; text-decoration: none; }
     .hit-list a:hover { text-decoration: underline; }
@@ -708,7 +783,7 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
         <div class="visual-head">
           <div>
             <h3>实时 DAG</h3>
-            <p>图有「开始 / 结束」。点任意节点查看检索词、命中列表或抓取内容。「10条命中」表示一次搜索返回了 10 条结果，不是搜了 10 次。</p>
+            <p>图有「开始 / 结束」。点任意节点查看检索词、命中列表或抓取内容。规划给出的完整 JSON 在右侧「规划方案」里，默认收起。</p>
           </div>
           <div class="legend">
             <span><i style="background:var(--faint)"></i>等待</span>
@@ -721,6 +796,15 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
         <div class="visual-body">
           <section id="board"></section>
           <aside class="side">
+            <details class="plan-box" id="planBox">
+              <summary>
+                <span>规划方案</span>
+                <span class="badge" id="planBadge">尚未规划</span>
+              </summary>
+              <div id="planMeta" class="plan-meta">模型给出的 DAG 会出现在这里。默认收起，点开即可查看节点、依赖和 JSON。</div>
+              <ol id="planOutline" class="plan-outline"></ol>
+              <pre id="planJson" class="plan-json"></pre>
+            </details>
             <div class="section-title">
               <span>节点详情</span>
               <span class="badge" id="inspectBadge">点击节点</span>
@@ -787,6 +871,7 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
     let selectedId = null;
     let selectedIndex = 0;
     let inspectLocked = false;
+    let planReady = false;
 
     function $(id) { return document.getElementById(id); }
     function setRuntime(text, tone) {
@@ -855,6 +940,33 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
       const s = String(text || "").replace(/\\s+/g, " ").trim();
       return s.length <= n ? s : s.slice(0, n) + "…";
     }
+    // AIGC START
+    function formatFailedResult(payload) {
+      const err = (payload && payload.error) || "unknown";
+      const nodes = (payload && payload.nodes) || [];
+      const done = nodes.filter(function (node) {
+        return node && node.status === "completed" && node.output != null;
+      });
+      const failedNodes = nodes.filter(function (node) {
+        return node && node.status === "failed";
+      });
+      const lines = ["快车道未完成：" + err];
+      if (done.length) {
+        lines.push("", "已完成节点的事实（请保留，不要重查）：");
+        done.forEach(function (node) {
+          const fact = typeof node.output === "string" ? node.output : JSON.stringify(node.output);
+          lines.push("- " + (node.id || "?") + ": " + clip(fact, 400));
+        });
+      }
+      if (failedNodes.length) {
+        lines.push("", "失败节点：");
+        failedNodes.forEach(function (node) {
+          lines.push("- " + (node.id || "?") + (node.error ? ": " + node.error : ""));
+        });
+      }
+      return lines.join("\\n");
+    }
+    // AIGC END
     function selectNode(id, index, fromUser) {
       selectedId = id;
       selectedIndex = index || 0;
@@ -1047,6 +1159,50 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
     function escapeHtml(text) {
       return String(text).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
     }
+    function planSourceLabel(source) {
+      if (source === "llm") return "模型当场生成";
+      if (source === "heuristic") return "出游夹具（无网关）";
+      if (source === "given") return "调用方直接提供";
+      return source || "";
+    }
+    function resetPlan() {
+      planReady = false;
+      const box = $("planBox");
+      if (box) box.open = false;
+      $("planBadge").textContent = "尚未规划";
+      $("planMeta").textContent = "模型给出的 DAG 会出现在这里。默认收起，点开即可查看节点、依赖和 JSON。";
+      $("planOutline").innerHTML = "";
+      $("planJson").textContent = "";
+    }
+    function setPlan(payload) {
+      const dsl = payload && payload.dsl ? payload.dsl : payload;
+      if (!dsl) return;
+      planReady = true;
+      const nodes = Array.isArray(dsl.nodes) ? dsl.nodes : [];
+      $("planBadge").textContent = nodes.length ? (nodes.length + " 节点") : "已生成";
+      const bits = [];
+      const source = planSourceLabel(payload && payload.source);
+      if (source) bits.push(source);
+      if (payload && payload.attempts) bits.push("第 " + payload.attempts + " 次通过校验");
+      if (dsl.name) bits.push(dsl.name);
+      $("planMeta").textContent = bits.join(" · ") || "规划 DAG";
+      $("planOutline").innerHTML = nodes.map((n) => {
+        const deps = n.dependsOn && n.dependsOn.length ? n.dependsOn.join(", ") : "无";
+        const extras = [];
+        if (n.if) extras.push("if " + n.if);
+        if (n.foreach) extras.push("foreach " + n.foreach);
+        const input = n.input ? JSON.stringify(n.input) : "";
+        return "<li><code>" + escapeHtml(n.id) + "</code> · " + escapeHtml(n.tool || "") +
+          '<div class="plan-deps">依赖 ' + escapeHtml(deps) + (extras.length ? " · " + escapeHtml(extras.join(" · ")) : "") + "</div>" +
+          (input ? '<div class="plan-input">' + escapeHtml(input) + "</div>" : "") +
+          "</li>";
+      }).join("");
+      try {
+        $("planJson").textContent = JSON.stringify(dsl, null, 2);
+      } catch {
+        $("planJson").textContent = String(dsl);
+      }
+    }
 
     function emptyHtml(mode) {
       if (mode === "planning") {
@@ -1177,8 +1333,16 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
         setStats("Planning", 0, 0);
         $("outputMeta").textContent = "规划 DAG 中";
         setOutput("模型正在生成 DAG…", true);
+        $("planBadge").textContent = "规划中";
         draw();
         logLine("规划  " + (via === "llm" ? "模型当场生成 DAG" : "无网关，使用出游夹具图"), true);
+        return;
+      }
+      if (ev.eventType === "workflow-plan" && ev.payload) {
+        setPlan(ev.payload);
+        const dsl = ev.payload.dsl || ev.payload;
+        const n = dsl && Array.isArray(dsl.nodes) ? dsl.nodes.length : 0;
+        logLine("方案  " + ((dsl && dsl.name) || "workflow") + " · " + n + " 个节点 · " + (planSourceLabel(ev.payload.source) || "已生成"), true);
         return;
       }
       if (ev.eventType === "workflow-graph" && ev.payload) {
@@ -1192,6 +1356,7 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
         setStats("Executing", graph.nodes.length, 0);
         $("outputMeta").textContent = "执行节点中";
         setOutput("DAG 已生成，正在执行节点…", true);
+        if (!planReady) setPlan({ dsl: { name: graph.name, nodes: graph.nodes } });
         logLine("图已生成  " + (graph.name || "workflow") + " · " + graph.nodes.length + " 个节点", true);
         draw();
         return;
@@ -1288,7 +1453,7 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
           setStats("Failed", graph ? graph.nodes.length : 0, countDone());
           $("outputMeta").textContent = "未完成";
           if (!lastOutput) {
-            setOutput("快车道未完成：" + String((ev.payload && ev.payload.error) || "unknown"));
+            setOutput(formatFailedResult(ev.payload));
           }
           followNode("__end__", 0);
           draw();
@@ -1335,6 +1500,7 @@ export const WORKFLOW_LIVE_HTML = `<!DOCTYPE html>
       selectedId = "__start__";
       selectedIndex = 0;
       inspectLocked = false;
+      resetPlan();
       $("runBtn").disabled = true;
       $("runBtn").textContent = "执行中…";
       clearLog();

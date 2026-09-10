@@ -38,9 +38,19 @@ describe('codingToolsEnabled', () => {
     else process.env.CODING_TOOLS_MCP = previous;
   });
 
+  it('is off when CODING_TOOLS_MCP is unset', () => {
+    delete process.env.CODING_TOOLS_MCP;
+    expect(codingToolsEnabled()).toBe(false);
+  });
+
   it('can be turned off with CODING_TOOLS_MCP=0', () => {
     process.env.CODING_TOOLS_MCP = '0';
     expect(codingToolsEnabled()).toBe(false);
+  });
+
+  it('is on only with an explicit CODING_TOOLS_MCP=1', () => {
+    process.env.CODING_TOOLS_MCP = '1';
+    expect(codingToolsEnabled()).toBe(true);
   });
 });
 
@@ -52,16 +62,30 @@ describe('codingReadPathCandidates', () => {
 
 describe('resolveWorkflowWorkspace', () => {
   const previous = process.env.WORKFLOW_WORKSPACE;
+  const previousOpenRush = process.env.OPENRUSH_ROOT;
+  const previousCoding = process.env.CODING_TOOLS_MCP_WORKSPACE;
   afterEach(() => {
     if (previous === undefined) delete process.env.WORKFLOW_WORKSPACE;
     else process.env.WORKFLOW_WORKSPACE = previous;
+    if (previousOpenRush === undefined) delete process.env.OPENRUSH_ROOT;
+    else process.env.OPENRUSH_ROOT = previousOpenRush;
+    if (previousCoding === undefined) delete process.env.CODING_TOOLS_MCP_WORKSPACE;
+    else process.env.CODING_TOOLS_MCP_WORKSPACE = previousCoding;
   });
 
   it('walks up from apps/agent-worker to the pnpm workspace root', () => {
     delete process.env.WORKFLOW_WORKSPACE;
     delete process.env.CODING_TOOLS_MCP_WORKSPACE;
+    delete process.env.OPENRUSH_ROOT;
     const workerRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
     expect(resolveWorkflowWorkspace(workerRoot)).toBe(resolve(workerRoot, '../..'));
+  });
+
+  it('prefers OPENRUSH_ROOT over walking from an empty sandbox', () => {
+    delete process.env.WORKFLOW_WORKSPACE;
+    delete process.env.CODING_TOOLS_MCP_WORKSPACE;
+    process.env.OPENRUSH_ROOT = '/tmp/open-rush-checkout';
+    expect(resolveWorkflowWorkspace('/tmp/empty-lux-sandbox/proj')).toBe('/tmp/open-rush-checkout');
   });
 });
 

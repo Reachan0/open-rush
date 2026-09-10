@@ -26,6 +26,8 @@ export const DAG_GAP_Y = 38;
 export const DAG_PAD = 18;
 
 export const WORKFLOW_PLAN_TOOL = 'workflow.plan';
+export const WORKFLOW_RUN_TOOL = 'workflow_run';
+export const WORKFLOW_DAG_MARKER = 'OPENRUSH_WORKFLOW_DAG:';
 const COMPOSE_TOOL = /^(text|article)\.compose$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,20 +40,84 @@ export function isComposeToolName(name: string): boolean {
 
 export function prettyToolName(name: string): string {
   const stripped = name
+    .replace(/^mcp__/i, '')
     .replace(/^amap-maps__/i, '高德 · ')
     .replace(/^coding-tools__/i, '编码 · ')
+    .replace(/^keenable-search__/i, '网页搜索 · ')
     .replace(/^web\.search$/i, '网页搜索')
     .replace(/^http\.fetch$/i, '抓取网页')
     .replace(/^fs\.read$/i, '读取文件')
     .replace(/^text\.compose$/i, '成文')
     .replace(/^article\.compose$/i, '成文')
-    .replace(/^workflow\.plan$/i, '执行计划');
+    .replace(/^workflow\.plan$/i, '执行计划')
+    .replace(/^workflow_run$/i, '快车道');
   return stripped.replaceAll('_', ' ');
 }
 
-export function parseWorkflowGraph(output: unknown): WorkflowDagGraph | null {
+export function isWorkflowPlanToolName(name: string): boolean {
+  return name === WORKFLOW_PLAN_TOOL || name === WORKFLOW_RUN_TOOL;
+}
+
+function parseDagMarker(text: string): Record<string, unknown> | null {
+  const idx = text.lastIndexOf(WORKFLOW_DAG_MARKER);
+  if (idx < 0) return null;
+  const raw = text.slice(idx + WORKFLOW_DAG_MARKER.length).trim();
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseMarkdownGraph(text: string): Record<string, unknown> | null {
+  const nodes: Array<{ id: string; tool: string; dependsOn: string[] }> = [];
+  for (const line of text.split('\n')) {
+    const match = line.match(/^- (\S+) \(([^)]+)\)(?: ← (.+))?$/);
+    if (!match) continue;
+    nodes.push({
+      id: match[1],
+      tool: match[2],
+      dependsOn: match[3]
+        ? match[3]
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+    });
+  }
+  if (nodes.length === 0) return null;
+  const named = text.match(/「([^」]+)」/);
+  return { name: named?.[1] ?? 'workflow', nodes };
+}
+
+function unwrapGraphRecord(output: unknown): Record<string, unknown> | null {
+  if (typeof output === 'string') {
+    return parseDagMarker(output) ?? parseMarkdownGraph(output);
+  }
   if (!isRecord(output)) return null;
-  const rawNodes = Array.isArray(output.nodes) ? output.nodes : [];
+  if (typeof output.text === 'string' && !Array.isArray(output.nodes)) {
+    const fromText = unwrapGraphRecord(output.text);
+    if (fromText) return fromText;
+  }
+  if (isRecord(output.dsl) && Array.isArray(output.dsl.nodes)) {
+    return {
+      ...output.dsl,
+      name: output.dsl.name ?? output.name,
+      edges: output.edges ?? output.dsl.edges,
+      waves: output.waves ?? output.dsl.waves,
+      nodeResults: output.nodeResults ?? output.dsl.nodeResults,
+      article: output.article ?? output.dsl.article,
+    };
+  }
+  if (Array.isArray(output.nodes)) return output;
+  return null;
+}
+
+export function parseWorkflowGraph(output: unknown): WorkflowDagGraph | null {
+  const record = unwrapGraphRecord(output);
+  if (!record) return null;
+  const rawNodes = Array.isArray(record.nodes) ? record.nodes : [];
   const nodes: WorkflowDagNode[] = [];
   for (const node of rawNodes) {
     if (!isRecord(node) || typeof node.id !== 'string') continue;
@@ -62,25 +128,95 @@ export function parseWorkflowGraph(output: unknown): WorkflowDagGraph | null {
     nodes.push({ id: node.id, tool, dependsOn });
   }
   if (nodes.length === 0) return null;
-  const edges = Array.isArray(output.edges)
-    ? output.edges.filter(
+  const edges = Array.isArray(record.edges)
+    ? record.edges.filter(
         (edge): edge is { from: string; to: string } =>
           isRecord(edge) && typeof edge.from === 'string' && typeof edge.to === 'string'
       )
     : nodes.flatMap((node) => node.dependsOn.map((from) => ({ from, to: node.id })));
   const effectiveEdges = edges.length > 0 ? edges : sequentialEdges(nodes);
-  const waves = Array.isArray(output.waves)
-    ? output.waves
+  const waves = Array.isArray(record.waves)
+    ? record.waves
         .filter((wave): wave is unknown[] => Array.isArray(wave))
         .map((wave) => wave.filter((id): id is string => typeof id === 'string'))
         .filter((wave) => wave.length > 0)
     : inferWaves(nodes, effectiveEdges);
   return {
-    name: typeof output.name === 'string' && output.name ? output.name : 'workflow',
+    name: typeof record.name === 'string' && record.name ? record.name : 'workflow',
     nodes,
     edges: effectiveEdges,
     waves: waves.length > 0 ? waves : inferWaves(nodes, effectiveEdges),
   };
+}
+
+/** Success output first; on output-error the DAG lives in errorText. */
+export function parseWorkflowGraphFromPart(
+  part:
+    | {
+        output?: unknown;
+        errorText?: string;
+      }
+    | null
+    | undefined
+): WorkflowDagGraph | null {
+  if (!part) return null;
+  return parseWorkflowGraph(part.output) ?? parseWorkflowGraph(part.errorText);
+}
+
+/** Card subtitle / red line: drop the DAG JSON trailer. */
+export function workflowErrorHeadline(errorText: string | undefined): string {
+  if (!errorText) return '';
+  const cut = errorText.indexOf(WORKFLOW_DAG_MARKER);
+  const body = (cut >= 0 ? errorText.slice(0, cut) : errorText).trim();
+  return body.split('\n')[0]?.trim() ?? '';
+}
+
+function parseMarkdownNodeResults(text: string): Record<string, unknown> {
+  const results: Record<string, unknown> = {};
+  const blocks = text.split(/^### /m).slice(1);
+  for (const block of blocks) {
+    const newline = block.indexOf('\n');
+    const heading = newline >= 0 ? block.slice(0, newline) : block;
+    const body = (newline >= 0 ? block.slice(newline + 1) : '').trim();
+    const id = heading.match(/^(\S+)/)?.[1];
+    if (!id || !body) continue;
+    const clipped = body.split('\n以上材料')[0]?.trim() ?? body;
+    try {
+      results[id] = JSON.parse(clipped);
+    } catch {
+      results[id] = clipped;
+    }
+  }
+  return results;
+}
+
+function outputText(output: unknown): string {
+  if (typeof output === 'string') return output;
+  if (isRecord(output) && typeof output.text === 'string') return output.text;
+  return '';
+}
+
+export function extractWorkflowNodeResults(output: unknown): Record<string, unknown> {
+  const record = unwrapGraphRecord(output);
+  if (isRecord(record?.nodeResults) && Object.keys(record.nodeResults).length > 0) {
+    return record.nodeResults;
+  }
+  const text = outputText(output);
+  return text ? parseMarkdownNodeResults(text) : {};
+}
+
+export function extractWorkflowArticle(output: unknown): string {
+  const record = unwrapGraphRecord(output);
+  if (typeof record?.article === 'string' && record.article.trim()) return record.article;
+  if (typeof record?.output === 'string' && record.output.trim()) return record.output;
+  return '';
+}
+
+export function findWorkflowPlanPart(message: UIMessage): DynamicToolUIPart | undefined {
+  return message.parts.find(
+    (part): part is DynamicToolUIPart =>
+      part.type === 'dynamic-tool' && isWorkflowPlanToolName(part.toolName)
+  );
 }
 
 export function sequentialEdges(nodes: WorkflowDagNode[]): Array<{ from: string; to: string }> {
@@ -126,13 +262,6 @@ export function inferWaves(
   return waves;
 }
 
-export function findWorkflowPlanPart(message: UIMessage): DynamicToolUIPart | undefined {
-  return message.parts.find(
-    (part): part is DynamicToolUIPart =>
-      part.type === 'dynamic-tool' && part.toolName === WORKFLOW_PLAN_TOOL
-  );
-}
-
 export function workflowNodeIdSet(graph: WorkflowDagGraph): Set<string> {
   return new Set(graph.nodes.map((node) => node.id));
 }
@@ -162,6 +291,7 @@ export function collectNodeStatuses(
   for (const part of message.parts) {
     if (part.type !== 'dynamic-tool') continue;
     const toolPart = part as DynamicToolUIPart;
+    if (isWorkflowPlanToolName(toolPart.toolName)) continue;
     const nodeId = statuses[toolPart.toolCallId]
       ? toolPart.toolCallId
       : graph.nodes.find(
@@ -177,6 +307,14 @@ export function collectNodeStatuses(
       status = 'skipped';
     }
     statuses[nodeId] = status;
+  }
+  const plan = findWorkflowPlanPart(message);
+  const touched = Object.values(statuses).some((status) => status !== 'pending');
+  if (!touched && plan) {
+    const overall = toolStateToDagStatus(plan.state);
+    const fill: DagNodeStatus =
+      overall === 'running' || overall === 'pending' ? 'pending' : overall;
+    for (const node of graph.nodes) statuses[node.id] = fill;
   }
   const hasReply = message.parts.some(
     (part) => part.type === 'text' && typeof part.text === 'string' && part.text.trim().length > 0
@@ -293,7 +431,7 @@ export function findLatestWorkflowPlan(messages: UIMessage[]): {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     const part = findWorkflowPlanPart(message);
-    if (part) return { message, part, graph: parseWorkflowGraph(part.output) };
+    if (part) return { message, part, graph: parseWorkflowGraphFromPart(part) };
   }
   return null;
 }
@@ -315,10 +453,10 @@ export function isWorkflowHiddenToolPart(
 ): boolean {
   if (part.type !== 'dynamic-tool') return false;
   const toolPart = part as DynamicToolUIPart;
-  if (toolPart.toolName === WORKFLOW_PLAN_TOOL) return false;
+  if (isWorkflowPlanToolName(toolPart.toolName)) return false;
   if (isComposeToolName(toolPart.toolName)) return true;
   const plan = findWorkflowPlanPart(message);
-  const graph = parseWorkflowGraph(plan?.output);
+  const graph = parseWorkflowGraphFromPart(plan);
   if (!graph) return false;
   return workflowNodeIdSet(graph).has(toolPart.toolCallId);
 }

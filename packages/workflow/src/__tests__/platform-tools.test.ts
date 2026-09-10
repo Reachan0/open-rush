@@ -117,6 +117,36 @@ describe('createPlatformToolInvoker', () => {
     expect(headers.get('X-Keenable-Title')).toBe('OpenRush');
   });
 
+  it('relative /v1/search would explode in fetch; web.search must stay absolute', async () => {
+    await expect(fetch('/v1/search')).rejects.toThrow(/Failed to parse URL/);
+    const calls: Array<{ url: string }> = [];
+    const tools = createPlatformToolInvoker({
+      root: tmpdir(),
+      keenable: { apiKey: 'keen_test', baseUrl: '/v1/search' },
+      fetchImpl: async (url) => {
+        calls.push({ url: String(url) });
+        return Response.json({ query: 'q', results: [] });
+      },
+    });
+    await tools.invoke('web.search', { query: '西湖跑步' });
+    expect(calls[0]?.url).toBe('https://api.keenable.ai/v1/search');
+    expect(calls[0]?.url).not.toBe('/v1/search');
+  });
+
+  it('empty keenable baseUrl still fetches an absolute search URL', async () => {
+    const calls: Array<{ url: string }> = [];
+    const tools = createPlatformToolInvoker({
+      root: tmpdir(),
+      keenable: { apiKey: 'keen_test', baseUrl: '' },
+      fetchImpl: async (url) => {
+        calls.push({ url: String(url) });
+        return Response.json({ query: 'q', results: [] });
+      },
+    });
+    await tools.invoke('web.search', { query: 'q' });
+    expect(calls[0]?.url).toBe('https://api.keenable.ai/v1/search');
+  });
+
   it('rejects an empty search query and surfaces Keenable HTTP errors', async () => {
     const tools = createPlatformToolInvoker({
       root: tmpdir(),

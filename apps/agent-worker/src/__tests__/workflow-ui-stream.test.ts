@@ -110,5 +110,58 @@ describe('WorkflowUiMapper', () => {
     });
     expect(rest.map((chunk) => chunk.type)).toEqual(['finish-step', 'finish']);
   });
+
+  it('maps the planner DSL onto the plan card and does not overwrite it with the graph', () => {
+    const mapper = new WorkflowUiMapper();
+    mapper.begin();
+    mapper.push({
+      eventType: 'workflow-planning',
+      payload: { intent: '总结两篇文档', via: 'llm' },
+    });
+    const planChunks = mapper.push({
+      eventType: 'workflow-plan',
+      payload: {
+        source: 'llm',
+        attempts: 1,
+        dsl: {
+          version: '1',
+          name: 'trip',
+          nodes: [
+            { id: 'geo', tool: 'amap-maps__maps_geo', input: { address: '外滩' } },
+            { id: 'write', tool: 'text.compose', dependsOn: ['geo'] },
+          ],
+        },
+      },
+    });
+    expect(planChunks).toEqual([
+      {
+        type: 'tool-output-available',
+        toolCallId: 'workflow-plan',
+        output: {
+          source: 'llm',
+          attempts: 1,
+          dsl: {
+            version: '1',
+            name: 'trip',
+            nodes: [
+              { id: 'geo', tool: 'amap-maps__maps_geo', input: { address: '外滩' } },
+              { id: 'write', tool: 'text.compose', dependsOn: ['geo'] },
+            ],
+          },
+        },
+      },
+    ]);
+    expect(
+      mapper.push({
+        eventType: 'workflow-graph',
+        payload: {
+          name: 'trip',
+          nodes: [{ id: 'geo', tool: 'amap-maps__maps_geo', dependsOn: [] }],
+          edges: [],
+          waves: [['geo']],
+        },
+      })
+    ).toEqual([]);
+  });
 });
 // AIGC END

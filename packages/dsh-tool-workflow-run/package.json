@@ -1,0 +1,29 @@
+{
+  "name": "@open-rush/dsh-tool-workflow-run",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cordis plugin: workflow_run fast-lane for DeepSeek Harness",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist node_modules coverage"
+  },
+  "dependencies": {
+    "@open-rush/workflow": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^4.0.0"
+  }
+}

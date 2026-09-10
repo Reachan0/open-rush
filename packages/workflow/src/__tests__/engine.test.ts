@@ -87,6 +87,32 @@ describe('engine expression coverage (B5)', () => {
     expect(result.output).toMatchObject({ path: 'src/router.ts', content: 'ok' });
   });
 
+  it('inherits a file path for the DSH native read tool', async () => {
+    const tools = createToolInvoker([
+      {
+        name: 'grep',
+        description: 'search',
+        execute: () => ({ path: 'src/router.ts', matches: [] }),
+      },
+      {
+        name: 'read',
+        description: 'read',
+        execute: (args) => ({ path: String(args.path), lines: [{ number: 1, text: 'ok' }] }),
+      },
+    ]);
+    const result = await executeWorkflow(
+      {
+        version: '1',
+        nodes: [
+          { id: 'search', tool: 'grep', input: { pattern: 'chooseLane' } },
+          { id: 'doc', tool: 'read', dependsOn: ['search'] },
+        ],
+      },
+      { tools }
+    );
+    expect(result.output).toMatchObject({ path: 'src/router.ts' });
+  });
+
   it('runs independent nodes in one wave (parallel)', async () => {
     let inflight = 0;
     let maxInflight = 0;
@@ -343,6 +369,44 @@ describe('guards and failure isolation (B6)', () => {
       );
     } catch (err) {
       expect(err).toMatchObject({ code: 'guard_timeout', nodeId: 'slowNode' });
+    }
+  });
+
+  it('keeps completed sibling nodes on the error when one parallel node fails', async () => {
+    const tools = createToolInvoker([
+      {
+        name: 'ok',
+        description: 'ok',
+        execute: (args) => ({ url: args.url as string, body: 'ok' }),
+      },
+      {
+        name: 'boom',
+        description: 'fail',
+        execute: () => {
+          throw new Error('fetch timeout');
+        },
+      },
+    ]);
+    try {
+      await executeWorkflow(
+        {
+          version: '1',
+          name: 'three_pages',
+          nodes: [
+            { id: 'a', tool: 'ok', input: { url: 'https://a.example' } },
+            { id: 'b', tool: 'ok', input: { url: 'https://b.example' } },
+            { id: 'c', tool: 'boom', input: { url: 'https://c.example' } },
+          ],
+        },
+        { tools }
+      );
+      throw new Error('expected failure');
+    } catch (err) {
+      expect(err).toBeInstanceOf(WorkflowError);
+      const nodes = (err as WorkflowError).nodes ?? [];
+      expect(nodes.filter((node) => node.status === 'completed')).toHaveLength(2);
+      expect(nodes.find((node) => node.id === 'c')?.status).toBe('failed');
+      expect(nodes.find((node) => node.id === 'c')?.error).toMatch(/timeout/);
     }
   });
 });

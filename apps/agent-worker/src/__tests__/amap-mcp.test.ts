@@ -31,6 +31,13 @@ describe('flattenAmapToolResult', () => {
     });
     expect(flat).toMatchObject({ location: '121.497442,31.240105', city: '上海市' });
   });
+
+  it('recognizes DSH MCP public names mcp__amap-maps__*', () => {
+    const flat = flattenAmapToolResult('mcp__amap-maps__maps_geo', {
+      results: [{ location: '121.497442,31.240105', city: '上海市' }],
+    });
+    expect(flat).toMatchObject({ location: '121.497442,31.240105' });
+  });
 });
 
 describe('normalizeAmapInvokeArgs', () => {

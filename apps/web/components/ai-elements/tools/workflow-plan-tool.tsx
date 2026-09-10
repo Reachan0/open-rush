@@ -8,12 +8,13 @@ import { useWorkflowDagPanel } from '@/components/chat/workflow-dag-context';
 import {
   collectNodeStatuses,
   countDagProgress,
-  parseWorkflowGraph,
+  parseWorkflowGraphFromPart,
+  workflowErrorHeadline,
 } from '@/lib/workflow-dag-model';
 import type { ToolRendererProps } from '../tool-registry';
 
 export function WorkflowPlanTool({ part, message }: ToolRendererProps) {
-  const graph = parseWorkflowGraph(part.output);
+  const graph = parseWorkflowGraphFromPart(part);
   const statuses = useMemo(
     () => (graph ? collectNodeStatuses(message, graph) : {}),
     [graph, message]
@@ -67,7 +68,11 @@ export function WorkflowPlanTool({ part, message }: ToolRendererProps) {
           <ChevronDown className={`size-4 transition ${expanded ? 'rotate-180' : ''}`} />
         </button>
       </div>
-      {part.errorText && <div className="px-4 pb-3 text-[12px] text-[#f87171]">{part.errorText}</div>}
+      {part.errorText && (
+        <div className="px-4 pb-3 text-[12px] text-[#f87171]">
+          {workflowErrorHeadline(part.errorText) || part.errorText}
+        </div>
+      )}
       {expanded && (
         <div className="max-h-[280px] overflow-auto border-t border-white/10">
           {planning && <div className="px-4 py-3 text-[12px] text-[#8fa3b8]">等待工作流图…</div>}

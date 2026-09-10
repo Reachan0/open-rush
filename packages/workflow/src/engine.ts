@@ -72,7 +72,7 @@ function withInheritedReadPath(
   node: WorkflowNode,
   ctx: InterpContext
 ): Record<string, unknown> {
-  if (!/(^|__)read_file$|^fs\.read$/i.test(toolName)) return args;
+  if (!/(^|__)read_file$|^fs\.read$|^read$/i.test(toolName)) return args;
   const current = args.path ?? args.file ?? args.filepath ?? args.filename ?? args.target;
   if (looksLikeFilePath(current) || (current && typeof current === 'object')) return args;
   for (const dep of node.dependsOn ?? []) {
@@ -148,6 +148,15 @@ export async function executeWorkflow(
   let steps = 0;
   const byId = new Map(dsl.nodes.map((n) => [n.id, n]));
   const remaining = new Set(dsl.nodes.map((n) => n.id));
+
+  const snapshotNodes = (): NodeResult[] =>
+    dsl.nodes.map(
+      (node) => results.get(node.id) ?? { id: node.id, tool: node.tool, status: 'pending' }
+    );
+
+  const fail = (code: string, message: string, nodeId?: string): never => {
+    throw new WorkflowError(code, message, nodeId, snapshotNodes());
+  };
 
   const ctxOf = (): InterpContext => ({
     intent: options.intent ?? {},
@@ -353,7 +362,7 @@ export async function executeWorkflow(
         error: message,
         durationMs: Date.now() - started,
       });
-      throw new WorkflowError(code, message, nodeId);
+      fail(code, message, nodeId);
     }
   };
 
@@ -369,9 +378,9 @@ export async function executeWorkflow(
     if (ready.length === 0) {
       const failed = [...results.values()].find((r) => r.status === 'failed');
       if (failed) {
-        throw new WorkflowError('node_failed', failed.error ?? 'upstream failed', failed.id);
+        fail('node_failed', failed.error ?? 'upstream failed', failed.id);
       }
-      throw new WorkflowError('cycle', `no runnable nodes among: ${[...remaining].join(', ')}`);
+      fail('cycle', `no runnable nodes among: ${[...remaining].join(', ')}`);
     }
 
     const wave = ready.map((id) => byId.get(id)).filter((n): n is WorkflowNode => Boolean(n));
@@ -381,11 +390,10 @@ export async function executeWorkflow(
     const firstReject = settled.find((s) => s.status === 'rejected');
     if (firstReject && firstReject.status === 'rejected') {
       const reason = firstReject.reason;
-      if (reason instanceof WorkflowError) throw reason;
-      throw new WorkflowError(
-        'node_failed',
-        reason instanceof Error ? reason.message : String(reason)
-      );
+      if (reason instanceof WorkflowError) {
+        fail(reason.code, reason.message, reason.nodeId);
+      }
+      fail('node_failed', reason instanceof Error ? reason.message : String(reason));
     }
   }
 

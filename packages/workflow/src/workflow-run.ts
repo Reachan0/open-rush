@@ -7,6 +7,7 @@ import { runTravelAgentLoop } from './loop-simulator.js';
 import type {
   FallbackReason,
   JsonValue,
+  NodeResult,
   ToolInvoker,
   WorkflowDsl,
   WorkflowEvent,
@@ -85,6 +86,7 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
     extra?: {
       dsl?: WorkflowDsl;
       nodeId?: string;
+      nodes?: NodeResult[];
       rounds?: number;
       usage?: WorkflowRunResult['usage'];
     }
@@ -97,6 +99,7 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         error,
         nodeId: extra?.nodeId,
         dsl: extra?.dsl,
+        nodes: extra?.nodes,
         events,
         rounds: extra?.rounds ?? 0,
         durationMs: Date.now() - started,
@@ -113,6 +116,7 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         error,
         nodeId: extra?.nodeId,
         dsl: extra?.dsl,
+        nodes: extra?.nodes,
         output,
         events,
         rounds: (extra?.rounds ?? 0) + 7,
@@ -127,6 +131,7 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
         error: `${error}; fallback failed: ${fbErr instanceof Error ? fbErr.message : String(fbErr)}`,
         nodeId: extra?.nodeId,
         dsl: extra?.dsl,
+        nodes: extra?.nodes,
         events,
         rounds: extra?.rounds ?? 0,
         durationMs: Date.now() - started,
@@ -142,6 +147,10 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
   try {
     if (input.dsl) {
       dsl = input.dsl as WorkflowDsl;
+      await sink.emit({
+        eventType: 'workflow-plan',
+        payload: { source: 'given', attempts: 0, dsl },
+      });
     } else {
       if (!input.intent) {
         throw new WorkflowError('generate_failed', 'intent or dsl is required');
@@ -160,6 +169,10 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
       dsl = generated.dsl;
       rounds = generated.attempts;
       usage = generated.usage;
+      await sink.emit({
+        eventType: 'workflow-plan',
+        payload: { source: generated.source, attempts: generated.attempts, dsl },
+      });
     }
   } catch (err) {
     const mapped = reasonFromError(err);
@@ -202,7 +215,13 @@ export async function workflowRun(input: WorkflowRunInput): Promise<WorkflowRunR
   } catch (err) {
     const mapped = reasonFromError(err);
     await sink.emit({ eventType: 'workflow-fallback', payload: mapped });
-    return runFallback(mapped.reason, mapped.error, { dsl, nodeId: mapped.nodeId, rounds, usage });
+    return runFallback(mapped.reason, mapped.error, {
+      dsl,
+      nodeId: mapped.nodeId,
+      nodes: err instanceof WorkflowError ? err.nodes : undefined,
+      rounds,
+      usage,
+    });
   }
 }
 // AIGC END

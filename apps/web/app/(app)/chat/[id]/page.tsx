@@ -4,7 +4,12 @@ import type { UIMessage } from 'ai';
 import { ArrowUp, Code, ExternalLink, Maximize2, Paperclip, Square } from 'lucide-react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Conversation, ConversationContent } from '@/components/ai-elements/conversation';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationFollow,
+  ConversationScrollButton,
+} from '@/components/ai-elements/conversation';
 import { Message, MessageContent } from '@/components/ai-elements/message';
 import { PartRenderer } from '@/components/ai-elements/part-renderer';
 import { WorkflowDagProvider } from '@/components/chat/workflow-dag-context';
@@ -529,7 +534,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (autoOpenedWorkflowRef.current) return;
     if (status !== 'streaming' && status !== 'submitted') return;
-    if (!findLatestWorkflowPlan(messages)?.graph) return;
+    if (!findLatestWorkflowPlan(messages)) return;
     autoOpenedWorkflowRef.current = true;
     setActiveTab('workflow');
   }, [messages, status]);
@@ -638,10 +643,13 @@ export default function ChatPage() {
         </div>
 
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          <div className={cn('flex flex-col min-w-[380px]', activeTab ? 'w-[42%]' : 'flex-1')}>
-            <div className="flex-1 overflow-y-auto px-5 py-5">
+          <div
+            className={cn('flex min-h-0 flex-col min-w-[380px]', activeTab ? 'w-[42%]' : 'flex-1')}
+          >
+            {/* AIGC START */}
+            <div className="flex min-h-0 flex-1 flex-col">
               {(!taskId || !projectId) && (
-                <div className="mx-auto max-w-2xl mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
+                <div className="mx-auto mb-4 w-full max-w-2xl px-5 pt-5 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-800 dark:text-amber-200">
                   缺少 task 或项目上下文。请从首页「开始聊天」进入，或从侧边栏打开会话。
                 </div>
               )}
@@ -652,8 +660,23 @@ export default function ChatPage() {
                 </div>
               )}
 
-              <Conversation className="max-w-2xl mx-auto">
-                <ConversationContent>
+              <Conversation className="w-full">
+                <ConversationFollow
+                  watch={messages
+                    .map((message) =>
+                      [
+                        message.id,
+                        message.parts.length,
+                        ...message.parts.map((part) =>
+                          part.type === 'text' || part.type === 'reasoning'
+                            ? `${part.type}:${part.text.length}`
+                            : part.type
+                        ),
+                      ].join(':')
+                    )
+                    .join('|')}
+                />
+                <ConversationContent className="mx-auto w-full max-w-2xl px-5 py-5">
                   {messages.length === 0 && !isLoading && (
                     <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
                       <p className="text-sm">
@@ -689,8 +712,10 @@ export default function ChatPage() {
                     </Message>
                   ))}
                 </ConversationContent>
+                <ConversationScrollButton />
               </Conversation>
             </div>
+            {/* AIGC END */}
 
             <div className="border-t border-border px-4 py-3 shrink-0">
               <div className="max-w-2xl mx-auto">

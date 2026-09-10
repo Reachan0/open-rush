@@ -25,8 +25,15 @@ vi.mock('../amap-mcp.js', () => ({
 vi.mock('../coding-mcp.js', () => ({
   tryConnectCodingTools: vi.fn(async () => null),
   codingToolsEnabled: () => false,
-  resolveWorkflowWorkspace: (start: string) => start,
+  resolveWorkflowWorkspace: () => '/resolved/open-rush',
 }));
+vi.mock('@lux/prompts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@lux/prompts')>();
+  return {
+    ...actual,
+    ensureProjectDir: vi.fn(() => '/tmp/empty-lux-sandbox/proj'),
+  };
+});
 vi.mock('@open-rush/workflow', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@open-rush/workflow')>();
   return {
@@ -42,6 +49,18 @@ vi.mock('@open-rush/workflow', async (importOriginal) => {
         await emit({
           eventType: 'workflow-planning',
           payload: { intent: 'demo', via: 'llm' },
+        });
+        await emit({
+          eventType: 'workflow-plan',
+          payload: {
+            source: 'llm',
+            attempts: 1,
+            dsl: {
+              version: '1',
+              name: 'gather',
+              nodes: [{ id: 'fetch_a', tool: 'http.fetch', input: { url: 'https://example.com' } }],
+            },
+          },
         });
         await emit({
           eventType: 'workflow-graph',
@@ -359,42 +378,94 @@ describe('agent-worker server', () => {
       expect(body.error).toBe('something went wrong');
     });
 
-    it('keeps vague travel prompts on the agent loop so the model can ask the city', async () => {
-      mockStreamTextSuccess();
+    it('keeps vague travel prompts on DSH so the model can ask the city instead of intercepting', async () => {
       const res = await postPrompt({
         prompt: '我周六想带全家出去玩，帮我推荐附近好玩的地方',
+        runtime: 'dsh',
       });
       expect(res.status).toBe(200);
-      expect(streamText).toHaveBeenCalled();
       expect(workflowRun).not.toHaveBeenCalled();
+      expect(runDshToUIMessageStream).toHaveBeenCalled();
     });
 
-    it('routes the current user turn even when history contains search hints', async () => {
-      mockStreamTextSuccess();
+    it('does not intercept the current turn when history contains search hints', async () => {
       const res = await postPrompt({
         prompt:
           '此前对话：\n\nUser: 帮我搜一下杭州周末去处\n\nAssistant: 可以去西湖\n\nUser: 帮我看看这段 TypeScript 报错',
+        runtime: 'dsh',
       });
       expect(res.status).toBe(200);
       expect(workflowRun).not.toHaveBeenCalled();
-      expect(streamText).toHaveBeenCalled();
+      expect(runDshToUIMessageStream).toHaveBeenCalled();
     });
 
-    it('routes gather-and-compose prompts onto the workflow lane', async () => {
+    it('sends gather prompts to DSH so the model can call workflow_run', async () => {
       const res = await postPrompt({
         prompt: '总结 https://example.com/a 和 https://example.com/b 写成一篇摘要',
+        runtime: 'dsh',
       });
       expect(res.status).toBe(200);
-      expect(res.headers.get('x-openrush-runtime')).toBe('workflow');
-      expect(workflowRun).toHaveBeenCalled();
-      expect(streamText).not.toHaveBeenCalled();
-      const text = await res.text();
-      expect(text).not.toContain('快车道');
-      expect(text).toContain('上海博物馆');
-      expect(text).toContain('text-delta');
-      expect(text).toContain('tool-input-start');
-      expect(text).toContain('workflow.plan');
-      expect(text).toContain('http.fetch');
+      expect(res.headers.get('x-openrush-runtime')).toBe('dsh');
+      expect(workflowRun).not.toHaveBeenCalled();
+      expect(runDshToUIMessageStream).toHaveBeenCalled();
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0]).toMatchObject({
+        systemPrompt: expect.stringMatching(/workflow_run/),
+        env: expect.objectContaining({
+          OPENRUSH_WORKFLOW_RUN_URL: expect.stringContaining('/workflow-run'),
+        }),
+      });
+    });
+
+    // AIGC START
+    it('points DSH cwd at the OpenRush root, not the empty Lux project sandbox', async () => {
+      const res = await postPrompt({
+        prompt: '列出 apps/agent-worker/dsh/ 目录里有哪些文件',
+        runtime: 'dsh',
+        projectId: 'proj-sandbox',
+      });
+      expect(res.status).toBe(200);
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0]).toMatchObject({
+        cwd: '/resolved/open-rush',
+        env: expect.objectContaining({
+          WORKFLOW_WORKSPACE: '/resolved/open-rush',
+        }),
+      });
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0].cwd).not.toContain(
+        'empty-lux-sandbox'
+      );
+    });
+    // AIGC END
+
+    it('forwards Amap and Keenable keys into the DSH child so Loop MCP can start', async () => {
+      const prevAmap = process.env.AMAP_MAPS_API_KEY;
+      const prevKeen = process.env.KEENABLE_API_KEY;
+      const prevKeenUrl = process.env.KEENABLE_API_URL;
+      const prevKeenBase = process.env.KEENABLE_BASE_URL;
+      process.env.AMAP_MAPS_API_KEY = 'amap_test_key';
+      process.env.KEENABLE_API_KEY = 'keen_test_key';
+      delete process.env.KEENABLE_API_URL;
+      delete process.env.KEENABLE_BASE_URL;
+      try {
+        const res = await postPrompt({ prompt: 'hello', runtime: 'dsh' });
+        expect(res.status).toBe(200);
+        expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0]).toMatchObject({
+          env: expect.objectContaining({
+            AMAP_MAPS_API_KEY: 'amap_test_key',
+            KEENABLE_API_KEY: 'keen_test_key',
+            KEENABLE_API_URL: 'https://api.keenable.ai',
+            KEENABLE_BASE_URL: 'https://api.keenable.ai',
+          }),
+        });
+      } finally {
+        if (prevAmap === undefined) delete process.env.AMAP_MAPS_API_KEY;
+        else process.env.AMAP_MAPS_API_KEY = prevAmap;
+        if (prevKeen === undefined) delete process.env.KEENABLE_API_KEY;
+        else process.env.KEENABLE_API_KEY = prevKeen;
+        if (prevKeenUrl === undefined) delete process.env.KEENABLE_API_URL;
+        else process.env.KEENABLE_API_URL = prevKeenUrl;
+        if (prevKeenBase === undefined) delete process.env.KEENABLE_BASE_URL;
+        else process.env.KEENABLE_BASE_URL = prevKeenBase;
+      }
     });
   });
 
@@ -638,6 +709,7 @@ describe('agent-worker server', () => {
       expect(res.headers.get('content-type') ?? '').toContain('text/event-stream');
       const text = await res.text();
       expect(text).toContain('workflow-planning');
+      expect(text).toContain('workflow-plan');
       expect(text).toContain('workflow-graph');
       expect(text).toContain('workflow-node-start');
       expect(text).toContain('workflow-result');
@@ -671,6 +743,13 @@ describe('agent-worker server', () => {
       expect(text).toContain('__end__');
       expect(text).toContain('data-node');
       expect(text).toContain('id="inspect"');
+      expect(text).toContain('id="planBox"');
+      expect(text).toContain('规划方案');
+      expect(text).toContain('id="planJson"');
+      expect(text).toContain('workflow-plan');
+      expect(text).toContain('formatFailedResult');
+      expect(text).toContain('已完成节点的事实');
+      expect(text).not.toContain('<details class="plan-box" open');
       expect(text).toContain('node-box.terminal.selected');
       expect(text).toContain('followNode("__end__"');
       expect(text).not.toContain('loadGraph');

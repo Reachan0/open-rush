@@ -14,7 +14,7 @@ import {
   XCircleIcon,
 } from 'lucide-react';
 import type { ComponentProps, ReactNode } from 'react';
-import { isValidElement, useEffect, useRef, useState } from 'react';
+import { isValidElement, useState } from 'react';
 
 import { CodeBlock } from './code-block';
 
@@ -45,17 +45,9 @@ export type ToolHeaderProps = {
 export const isToolRunning = (state: ToolPart['state'] | undefined): boolean =>
   state === 'input-available' || state === 'input-streaming' || state === 'approval-requested';
 
-/** Controlled open state: auto-expand while running, never mutate defaultOpen. */
-export function useToolOpen(state: ToolPart['state'] | undefined) {
-  const running = isToolRunning(state);
-  const [open, setOpen] = useState(running);
-  const prevRunning = useRef(running);
-  useEffect(() => {
-    if (running && !prevRunning.current) {
-      setOpen(true);
-    }
-    prevRunning.current = running;
-  }, [running]);
+/** Controlled open state: stay collapsed unless the user expands. */
+export function useToolOpen(_state: ToolPart['state'] | undefined) {
+  const [open, setOpen] = useState(false);
   return { open, onOpenChange: setOpen };
 }
 // AIGC END

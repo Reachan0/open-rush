@@ -57,12 +57,14 @@ export const DEFAULT_GUARDS: WorkflowGuards = {
 export class WorkflowError extends Error {
   readonly code: string;
   readonly nodeId?: string;
+  readonly nodes?: NodeResult[];
 
-  constructor(code: string, message: string, nodeId?: string) {
+  constructor(code: string, message: string, nodeId?: string, nodes?: NodeResult[]) {
     super(message);
     this.name = 'WorkflowError';
     this.code = code;
     this.nodeId = nodeId;
+    this.nodes = nodes;
   }
 }
 

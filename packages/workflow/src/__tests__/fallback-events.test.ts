@@ -2,7 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { createMemorySink, toRunEvents } from '../events.js';
 import { WEEKEND_TRIP_INTENT } from '../fixtures.js';
+import { createToolInvoker } from '../tools.js';
 import { createTravelToolInvoker, TRAVEL_EXCLUDED } from '../travel-tools.js';
+import type { JsonValue } from '../types.js';
 import { workflowRun } from '../workflow-run.js';
 
 describe('fallback (B7)', () => {
@@ -33,6 +35,36 @@ describe('fallback (B7)', () => {
     expect(String(result.output)).toContain('上海');
   });
 
+  it('returns completed nodes when disableFallback and one parallel tool fails', async () => {
+    const result = await workflowRun({
+      intent: '对照三页',
+      dsl: {
+        version: '1',
+        name: 'three_pages',
+        nodes: [
+          { id: 'a', tool: 'echo', input: { value: { url: 'https://a.example', body: 'A' } } },
+          { id: 'b', tool: 'echo', input: { value: { url: 'https://b.example', body: 'B' } } },
+          { id: 'c', tool: 'boom', input: { value: 'x' } },
+        ],
+      },
+      tools: createToolInvoker([
+        { name: 'echo', description: 'echo', execute: (args) => args.value as JsonValue },
+        {
+          name: 'boom',
+          description: 'fail',
+          execute: () => {
+            throw new Error('fetch timeout');
+          },
+        },
+      ]),
+      disableFallback: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.nodes?.filter((node) => node.status === 'completed')).toHaveLength(2);
+    expect(result.nodes?.find((node) => node.id === 'c')?.status).toBe('failed');
+    expect(result.error).toMatch(/timeout/);
+  });
+
   it('does not fallback when disableFallback is set', async () => {
     const result = await workflowRun({
       intent: 'nope',
@@ -55,7 +87,24 @@ describe('metering (B8)', () => {
     expect(result.ok).toBe(true);
     const types = events.map((e) => e.eventType);
     expect(types).toContain('workflow-planning');
+    expect(types).toContain('workflow-plan');
     expect(types).toContain('workflow-graph');
+    const plan = events.find((e) => e.eventType === 'workflow-plan');
+    expect(plan?.payload).toMatchObject({
+      source: 'heuristic',
+      attempts: 1,
+      dsl: expect.objectContaining({
+        name: 'weekend-family-trip',
+        nodes: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'locate',
+            tool: 'geo.locate',
+            input: { query: '{{intent.text}}' },
+          }),
+        ]),
+      }),
+    });
+    expect(types.indexOf('workflow-plan')).toBeLessThan(types.indexOf('workflow-graph'));
     expect(types.filter((t) => t === 'workflow-node-start').length).toBeGreaterThanOrEqual(7);
     expect(types).toContain('workflow-node-end');
     expect(types).toContain('workflow-usage');
