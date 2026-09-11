@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { withRequestContext } from '../context.js';
 import { createLogger } from '../logger.js';
@@ -13,6 +16,17 @@ function collectLogs() {
 }
 
 describe('createLogger', () => {
+  it('ships the pretty transport as a runtime dependency', () => {
+    const packageJsonPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../package.json');
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+
+    expect(packageJson.dependencies?.['pino-pretty']).toBeDefined();
+    expect(packageJson.devDependencies?.['pino-pretty']).toBeUndefined();
+  });
+
   it('can disable worker-based pretty transport in a development web bundle', () => {
     vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('LOG_PRETTY', 'false');

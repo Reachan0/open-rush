@@ -76,5 +76,5 @@ Sensitive fields are automatically redacted in logs: `authorization`, `cookie`, 
 ## Dependencies
 
 - `pino` — JSON logger
-- `pino-pretty` (dev) — pretty-print for development
+- `pino-pretty` — pretty-print transport used by development loggers
 - `hono` (optional peer) — only needed for `@open-rush/observability/hono`
