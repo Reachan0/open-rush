@@ -38,7 +38,7 @@ const env = {
   WORKSPACE_PATH: workspace,
   OPENRUSH_ROOT: runtime, AGENT_RUNTIME: 'dsh',
   DSH_CORDIS_CONFIG: join(runtime, 'apps/agent-worker/dsh/cordis-ao04-fastlane.yml'),
-  DSH_MAX_TOKENS_AS_SUCCESS: 'false', DSH_MAX_TOKENS: '4096', DSH_SNAPSHOT: 'none',
+  DSH_MAX_TOKENS_AS_SUCCESS: 'false', DSH_MAX_TOKENS: '8192', DSH_SNAPSHOT: 'none',
   WORKFLOW_LLM_REASONING_EFFORT: 'low',
   TMPDIR: join(output, 'tmp'), NO_PROXY: 'localhost,127.0.0.1', no_proxy: 'localhost,127.0.0.1',
 };

@@ -9,6 +9,11 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function turnEndReason(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  return isRecord(value) ? asString(value.kind) : undefined;
+}
+
 function parseToolInput(raw: string): unknown {
   try {
     return JSON.parse(raw) as unknown;
@@ -135,9 +140,18 @@ export class DshEventMapper {
         chunks.push(...this.mapToolResult(data));
         return chunks;
       case 'turn/end': {
-        const reason = asString(data.reason);
-        if (reason && reason !== 'success' && reason !== 'stop' && reason !== 'tool-calls') {
-          chunks.push({ type: 'error', errorText: reason });
+        const reason = turnEndReason(data.reason);
+        if (reason === 'max-tokens') {
+          return this.error('DSH output token limit reached before the response completed');
+        }
+        if (
+          reason &&
+          reason !== 'completed' &&
+          reason !== 'success' &&
+          reason !== 'stop' &&
+          reason !== 'tool-calls'
+        ) {
+          return this.error(`DSH turn ended: ${reason}`);
         }
         return chunks;
       }

@@ -408,6 +408,24 @@ describe('agent-worker server', () => {
       });
     });
 
+    it('asks DSH to keep straightforward website writes bounded', async () => {
+      const res = await postPrompt({
+        prompt: 'build a company website',
+        runtime: 'dsh',
+        projectId: 'website-project',
+      });
+      expect(res.status).toBe(200);
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0]).toMatchObject({
+        systemPrompt: expect.stringMatching(/compact self-contained index\.html first/),
+      });
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0].systemPrompt).toContain(
+        'Never emit more than one write or edit tool call in the same assistant step'
+      );
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0].systemPrompt).toContain(
+        'answer in at most 80 Chinese characters'
+      );
+    });
+
     it('keeps DSH tools inside the selected project workspace', async () => {
       const res = await postPrompt({
         prompt: '列出 apps/agent-worker/dsh/ 目录里有哪些文件',
@@ -465,9 +483,11 @@ describe('agent-worker server', () => {
           systemPrompt: 'custom runtime',
         });
         expect(res.status).toBe(200);
-        expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0]).toMatchObject({
-          systemPrompt: 'custom runtime',
+        const call = (runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0];
+        expect(call).toMatchObject({
+          systemPrompt: expect.stringContaining('custom runtime'),
         });
+        expect(call.systemPrompt).not.toContain('workflow_run');
       } finally {
         if (previous === undefined) delete process.env.DSH_CORDIS_CONFIG;
         else process.env.DSH_CORDIS_CONFIG = previous;

@@ -59,6 +59,8 @@ const AO04_DEMO_FIXTURES = [
   'm3/delivery-policy.txt',
 ] as const;
 
+const FILE_AUTHORING_PROMPT_SECTION = `For a straightforward website request, write a compact self-contained index.html first (about 12 KB or 220 lines maximum) and make it immediately previewable. Do not use todo_write or inspect unrelated files unless the task actually requires it. For a larger app, split HTML, CSS, and JavaScript across files. Never emit more than one write or edit tool call in the same assistant step: call the tool, wait for its result, and only then draft the next file. Keep reasoning and preambles brief. After the files are ready, verify only what is necessary and answer in at most 80 Chinese characters.`;
+
 function seedAo04DemoFixtures(projectPath: string): void {
   if (process.env.AO04_SERVICE_DEMO !== '1') return;
   const sharedWorkspace = process.env.WORKSPACE_PATH?.trim();
@@ -362,10 +364,15 @@ app.post('/prompt', async (c) => {
       const workflowRunEnabled = configuredComposition
         ? compositionHasWorkflowRun(configuredComposition)
         : process.env.AO04_DEMO !== '1';
-      const dshSystemPrompt =
-        !workflowRunEnabled || effectiveSystemPrompt?.includes('workflow_run')
-          ? effectiveSystemPrompt
-          : [effectiveSystemPrompt, WORKFLOW_RUN_PROMPT_SECTION].filter(Boolean).join('\n\n');
+      const dshSystemPrompt = [
+        effectiveSystemPrompt,
+        workflowRunEnabled && !effectiveSystemPrompt?.includes('workflow_run')
+          ? WORKFLOW_RUN_PROMPT_SECTION
+          : undefined,
+        FILE_AUTHORING_PROMPT_SECTION,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
       const response = runDshToUIMessageStream({
         prompt: userPrompt,
         sessionId: sid,
