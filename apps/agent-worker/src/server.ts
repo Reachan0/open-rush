@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { serve } from '@hono/node-server';
 import {
   ensureProjectDir,
@@ -51,6 +51,27 @@ const app = new Hono();
 // AIGC START
 const activeSessions = new Map<string, { controller: AbortController; runId: string }>();
 // AIGC END
+
+const AO04_DEMO_FIXTURES = [
+  'm3/pre.txt',
+  'm3/post.txt',
+  'm3/project-delivery-input.json',
+  'm3/delivery-policy.txt',
+] as const;
+
+function seedAo04DemoFixtures(projectPath: string): void {
+  if (process.env.AO04_SERVICE_DEMO !== '1') return;
+  const sharedWorkspace = process.env.WORKSPACE_PATH?.trim();
+  if (!sharedWorkspace || resolve(sharedWorkspace) === resolve(projectPath)) return;
+
+  for (const relativePath of AO04_DEMO_FIXTURES) {
+    const source = join(sharedWorkspace, relativePath);
+    const target = join(projectPath, relativePath);
+    if (!existsSync(source) || existsSync(target)) continue;
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(source, target);
+  }
+}
 
 function compositionHasWorkflowRun(configPath: string): boolean {
   try {
@@ -261,6 +282,7 @@ app.post('/prompt', async (c) => {
 
     if (projectId) {
       projectPath = ensureProjectDir(projectId);
+      seedAo04DemoFixtures(projectPath);
       console.log(`[Workspace] Project directory ready: ${projectPath}`);
 
       // If agentConfig is provided, resolve system prompt via prompt-resolver
@@ -298,9 +320,10 @@ app.post('/prompt', async (c) => {
       : 'https://api.keenable.ai';
     const repoWorkspace = resolveWorkflowWorkspace(process.cwd());
     const workspaceCwd =
-      process.env.AO04_SERVICE_DEMO === '1'
-        ? (process.env.WORKSPACE_PATH ?? projectPath ?? repoWorkspace)
-        : (projectPath ?? repoWorkspace);
+      projectPath ??
+      (process.env.AO04_SERVICE_DEMO === '1'
+        ? (process.env.WORKSPACE_PATH ?? repoWorkspace)
+        : repoWorkspace);
     const providerEnv: Record<string, string> = {
       ...(env ?? {}),
       ...(process.env.ANTHROPIC_BASE_URL && { ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL }),

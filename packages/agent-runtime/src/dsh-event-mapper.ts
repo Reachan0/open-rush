@@ -63,7 +63,19 @@ export class DshEventMapper {
     if (notification.method === 'session.status') {
       const status = asString(notification.params.status);
       if (status === 'running') return this.ensureStart();
-      if (status === 'idle') return this.finish('stop');
+      if (status === 'idle') {
+        const unfinished = [...this.seenToolCalls].filter(
+          (toolCallId) => !this.finishedToolCalls.has(toolCallId)
+        );
+        if (unfinished.length > 0) {
+          return this.error(
+            `DSH session ended before tool call completed: ${unfinished
+              .map((toolCallId) => this.toolNames.get(toolCallId) ?? toolCallId)
+              .join(', ')}`
+          );
+        }
+        return this.finish('stop');
+      }
       return [];
     }
     if (notification.method !== 'session.event') return [];

@@ -77,7 +77,7 @@ vi.mock('@open-rush/workflow', async (importOriginal) => {
   };
 });
 
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDshToUIMessageStream } from '@open-rush/agent-runtime';
@@ -421,6 +421,38 @@ describe('agent-worker server', () => {
           WORKFLOW_WORKSPACE: expect.stringMatching(/workspace\/proj-sandbox$/),
         }),
       });
+    });
+
+    it('keeps project isolation when the fixed AO-04 service demo is enabled', async () => {
+      const previous = process.env.AO04_SERVICE_DEMO;
+      const previousWorkspace = process.env.WORKSPACE_PATH;
+      const demoWorkspace = mkdtempSync(join(tmpdir(), 'ao04-demo-workspace-'));
+      mkdirSync(join(demoWorkspace, 'm3'), { recursive: true });
+      writeFileSync(join(demoWorkspace, 'm3/pre.txt'), 'demo fixture');
+      process.env.AO04_SERVICE_DEMO = '1';
+      process.env.WORKSPACE_PATH = demoWorkspace;
+      try {
+        const res = await postPrompt({
+          prompt: 'create index.html',
+          runtime: 'dsh',
+          projectId: 'demo-project-isolated',
+        });
+        expect(res.status).toBe(200);
+        const projectPath = join(demoWorkspace, 'demo-project-isolated');
+        expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0]).toMatchObject({
+          cwd: projectPath,
+          env: expect.objectContaining({
+            WORKFLOW_WORKSPACE: projectPath,
+          }),
+        });
+        expect(existsSync(join(projectPath, 'm3/pre.txt'))).toBe(true);
+        expect(readFileSync(join(projectPath, 'm3/pre.txt'), 'utf8')).toBe('demo fixture');
+      } finally {
+        if (previous === undefined) delete process.env.AO04_SERVICE_DEMO;
+        else process.env.AO04_SERVICE_DEMO = previous;
+        if (previousWorkspace === undefined) delete process.env.WORKSPACE_PATH;
+        else process.env.WORKSPACE_PATH = previousWorkspace;
+      }
     });
 
     it('does not advertise workflow_run for a custom DSH composition without the plugin', async () => {

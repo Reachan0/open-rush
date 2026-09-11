@@ -37,6 +37,36 @@ describe('DshEventMapper', () => {
     ]);
   });
 
+  it('fails an unfinished tool call when the DSH session becomes idle', () => {
+    const mapper = new DshEventMapper('m');
+    mapper.pushNotification(
+      event('assistant/chunk', {
+        chunk: {
+          type: 'tool-call-delta',
+          id: 'partial-write',
+          name: 'write',
+          argumentsDelta: '{"file_path":"index.html"',
+        },
+      })
+    );
+
+    const chunks = mapper.pushNotification({
+      method: 'session.status',
+      params: { sessionId: 's1', status: 'idle' },
+    });
+
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool-output-error',
+          toolCallId: 'partial-write',
+        }),
+        expect.objectContaining({ type: 'error' }),
+        expect.objectContaining({ type: 'finish', reason: 'error' }),
+      ])
+    );
+  });
+
   it('maps text deltas into UIMessageChunk text family', () => {
     const mapper = new DshEventMapper('msg-1');
     const chunks = [
