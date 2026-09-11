@@ -8,7 +8,9 @@
 | 仓库 | 路径 | 说明 |
 |------|------|------|
 | OpenRush（本仓库） | `/home/ubuntu/projects/open-rush` | Web / 队列 / agent-worker / 快车道 |
+| OpenRush AO-04 融合分支 | `/home/ubuntu/projects/open-rush-ao04-fastlane` | 当前部署的快车道 + AO-04 融合版本 |
 | DeepSeek Harness | `/home/ubuntu/projects/deepseek-harness` | 慢车道真正跑模型和工具的引擎，**不要改源码** |
+| AO-04 独立实验 | `/home/ubuntu/projects/ao04-experiment` | 8765 独立课题页面、冻结结果和现场演示 |
 
 DSH **没有自己的 8787/3000 端口**。`AGENT_RUNTIME=dsh` 时，agent-worker 按对话 spawn 子进程，用 JSON-RPC 说话。健康检查里 `"runtime":"dsh"` 就说明接到了。
 
@@ -30,10 +32,35 @@ flowchart LR
 - 快车道图：http://145.241.168.101:8787/workflow-live
 - 健康检查：http://145.241.168.101:8787/health
 - 工具目录：http://145.241.168.101:8787/workflow-catalog
+- AO-04 独立课题：http://145.241.168.101:8765
+
+三类页面的职责不同：8765 展示 AO-04 独立实验结果和现场处置；8766（本地融合演示台）用于制造受保护业务故障；OpenRush 聊天和 Workflow 页面用于发起任务、展示工具调用与 DAG。Oracle 当前部署的 OpenRush 页面仍以 3000 为入口，8765 独立课题页面与 OpenRush 相互独立。
 
 8799 只是本机端口被占时临时换过，仓库默认是 **8787**。
 
 ---
+
+## AO-04 独立课题页面（8765）
+
+首次部署或更新独立实验页面：
+
+```bash
+ssh oracle
+export PATH="$HOME/.local/bin:$PATH"
+cd /home/ubuntu/projects/ao04-experiment
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+screen -dmS ao04-standalone bash -lc 'cd /home/ubuntu/projects/ao04-experiment && exec env PYTHONPATH=. AO04_HOST=0.0.0.0 AO04_PORT=8765 .venv/bin/python -m src.web_demo >> web-demo.log 2>&1'
+```
+
+验证：
+
+```bash
+curl -fsS http://127.0.0.1:8765/api/replay/metrics
+screen -ls
+```
+
+页面不需要模型密钥；它读取本地冻结实验结果并提供独立的现场演示。不要把 `.venv` 或真实密钥提交到 Git。
 
 ## 什么进 Git，什么不要拷到机器上
 
