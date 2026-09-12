@@ -24,6 +24,8 @@ export interface Config {
   hideEligibleFromOuter?: boolean;
   /** Exact readonly runtime tool names admitted by this composition. */
   eligibleToolNames?: string[];
+  /** Graph-eligible tools that must remain visible for outer-loop safety checks. */
+  outerVisibleToolNames?: string[];
 }
 
 type LoopToolsHost = {
@@ -116,6 +118,7 @@ export async function apply(ctx: PluginCtx, config: Config = {}): Promise<void> 
         return filterOuterLoopCatalog(assembled, {
           repair,
           eligibleToolNames: config.eligibleToolNames,
+          outerVisibleToolNames: config.outerVisibleToolNames,
         });
       });
     }

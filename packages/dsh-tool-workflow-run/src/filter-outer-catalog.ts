@@ -64,13 +64,19 @@ export function isOuterLoopTool(
  */
 export function filterOuterLoopCatalog<T extends OuterCatalogAssembly>(
   assembly: T,
-  options?: { repair?: boolean; eligibleToolNames?: readonly string[] }
+  options?: {
+    repair?: boolean;
+    eligibleToolNames?: readonly string[];
+    outerVisibleToolNames?: readonly string[];
+  }
 ): T {
   const alwaysHidden = new Set(options?.eligibleToolNames ?? []);
+  const alwaysVisible = new Set(options?.outerVisibleToolNames ?? []);
   const shouldHide = (toolName: string) =>
-    options?.repair
+    !alwaysVisible.has(toolName) &&
+    (options?.repair
       ? alwaysHidden.has(toolName)
-      : !isOuterLoopTool(toolName, { eligibleToolNames: options?.eligibleToolNames });
+      : !isOuterLoopTool(toolName, { eligibleToolNames: options?.eligibleToolNames }));
   const hidden = new Set(
     assembly.tools.filter((tool) => shouldHide(tool.name)).map((tool) => tool.name)
   );

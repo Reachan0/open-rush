@@ -422,6 +422,12 @@ describe('agent-worker server', () => {
         'Never emit more than one write or edit tool call in the same assistant step'
       );
       expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0].systemPrompt).toContain(
+        'If the target file already exists, read that exact file before replacing it'
+      );
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0].systemPrompt).toContain(
+        'Use the dedicated read tool, because bash or an indirect workflow read does not satisfy the write safety check'
+      );
+      expect((runDshToUIMessageStream as Mock).mock.calls.at(-1)?.[0].systemPrompt).toContain(
         'answer in at most 80 Chinese characters'
       );
     });

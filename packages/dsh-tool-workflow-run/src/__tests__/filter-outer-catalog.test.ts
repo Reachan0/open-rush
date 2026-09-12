@@ -82,5 +82,31 @@ describe('filterOuterLoopCatalog', () => {
     expect(consumeOuterRepair(scope)).toBe(true);
     expect(consumeOuterRepair(scope)).toBe(false);
   });
+
+  it('keeps configured safety prerequisite tools visible to the outer loop', () => {
+    const out = filterOuterLoopCatalog(
+      {
+        tools: [
+          { name: 'workflow_run' },
+          { name: 'read' },
+          { name: 'web_fetch' },
+          { name: 'write' },
+        ],
+        sections: [
+          { name: 'tool:read', text: 'Read a file before overwriting it.' },
+          { name: 'tool:web_fetch', text: 'Fetch a URL.' },
+        ],
+      },
+      { outerVisibleToolNames: ['read'] }
+    );
+
+    expect(out.tools.map((tool) => tool.name).sort()).toEqual(['read', 'workflow_run', 'write']);
+    expect(out.sections.find((section) => section.name === 'tool:read')?.text).toBe(
+      'Read a file before overwriting it.'
+    );
+    expect(out.sections.find((section) => section.name === 'tool:web_fetch')?.text).toMatch(
+      /不要直接调用/
+    );
+  });
 });
 // AIGC END

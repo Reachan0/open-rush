@@ -106,5 +106,9 @@
   config:
     eligibleToolNames:
       - ao04_read_status
+    # DSH write refuses to replace an existing file until the outer session
+    # has called the dedicated read tool. Keep that safety prerequisite visible.
+    outerVisibleToolNames:
+      - read
     hideEligibleFromOuter: true
 # AIGC END
